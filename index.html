@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="bg" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="google" content="notranslate">
+    <title>Truck Tacho Pro</title>
+    <link rel="manifest" href="./manifest.json">
+    <style>
+        :root { --ui-scale: 1; }
+        body{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:10px;display:flex;flex-direction:column;align-items:center;overflow-x:hidden}
+        #main-view, #rest-view, #report-view {width:100%; display:flex; flex-direction:column; align-items:center; padding-bottom:20px;}
+        #rest-view, #report-view {display:none;}
+        
+        .scale-wrapper { width:100%; transform: scale(var(--ui-scale)); transform-origin: top center; display:flex; flex-direction:column; align-items:center; transition: transform 0.3s ease;}
+
+        .header{width:100%;display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px}
+        .joker-wrapper{display:flex;flex-direction:column;align-items:center;width:60px}
+        .joker-label{font-size:9px;color:#aaa;margin-bottom:3px;font-weight:bold;text-transform:uppercase}
+        .btn-joker{display:flex;flex-direction:column;align-items:center;justify-content:center;width:50px;height:50px;border-radius:10px;border:2px solid #222;}
+        .btn-joker .big-num{font-size:20px;font-weight:bold;line-height:1} .btn-joker .small-text{font-size:10px;font-weight:bold;margin-top:2px}
+        .bg-green{background:#4CAF50;color:#fff;border-color:#388E3C} .bg-orange{background:#FF9800;border-color:#F57C00} .bg-red{background:#F44336;border-color:#D32F2F}
+        
+        .date-title{font-size:18px;font-weight:bold;text-align:center;flex:1;display:flex;flex-direction:column;align-items:center;margin-top:5px}
+        .live-status{font-size:9px;padding:3px 8px;border-radius:10px;margin-top:3px;display:flex;align-items:center;gap:4px;text-transform:uppercase}
+        .live-dot{width:5px;height:5px;border-radius:50%;animation:blink 1.5s infinite}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+        
+        .top-controls{display:flex; justify-content:space-between; width:98%; align-items:center; margin-bottom:5px;}
+        .gps-toggle-wrapper{display:flex;flex-direction:column;align-items:center;}
+        .switch{position:relative;display:inline-block;width:40px;height:20px;margin-top:2px}
+        .switch input{opacity:0;width:0;height:0}
+        .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#F44336;border-radius:20px;transition:.4s}
+        .slider:before{position:absolute;content:"";height:16px;width:16px;left:2px;bottom:2px;background:#fff;border-radius:50%;transition:.4s}
+        input:checked+.slider{background:#4CAF50} input:checked+.slider:before{transform:translateX(20px)}
+        
+        .btn-menu{background:transparent; border:1px solid #444; color:#fff; font-size:18px; padding:4px 10px; border-radius:8px; cursor:pointer;}
+        
+        .start-buttons-container { width:98%; display:flex; gap:8px; margin:5px 0 10px 0; flex-wrap:wrap;}
+        .btn-course { flex:1.2; height:50px; background:#222; color:#FFEB3B; border:1px solid #555; border-radius:8px; font-weight:bold; font-size:14px; display:flex; justify-content:center; align-items:center; cursor:pointer;}
+        .btn-shift { flex:1; height:50px; background:#1a1a1a; color:#fff; border:2px solid #2196F3; border-radius:8px; font-weight:bold; font-size:14px; display:flex; justify-content:center; align-items:center; cursor:pointer;}
+        .btn-shift.active { background:#c62828; border-color:#F44336;}
+        
+        .btn-ble { flex-basis: 100%; height:45px; background:#0D47A1; color:#fff; border:2px solid #2196F3; border-radius:8px; font-weight:bold; font-size:14px; display:flex; justify-content:center; align-items:center; cursor:pointer; margin-top:5px;}
+        .btn-ble.connected { background:#1b5e20; border-color:#4CAF50; }
+
+        .tacho-container{position:relative;width:190px;height:190px;display:flex;justify-content:center;align-items:center;margin:5px 0 10px 0;cursor:pointer;transition:.3s}
+        .circle-svg{transform:rotate(-90deg);width:100%;height:100%} .circle-bg{fill:none;stroke:#222;stroke-width:12}
+        .circle-progress{fill:none;stroke:#4CAF50;stroke-width:12;stroke-dasharray:600;stroke-dashoffset:0;stroke-linecap:round;transition:stroke .5s}
+        .tacho-text{position:absolute;text-align:center;display:flex;flex-direction:column;align-items:center;pointer-events:none}
+        .time-big{font-size:44px;font-weight:bold;line-height:1;margin:2px 0; pointer-events:auto; cursor:pointer; padding:5px; border-radius:8px; background:rgba(0,0,0,0.4);}
+        .label{font-size:10px;color:#888;text-transform:uppercase;}
+        @keyframes pulse{0%,100%{filter:drop-shadow(0 0 5px rgba(33,150,243,.4))}50%{filter:drop-shadow(0 0 15px rgba(33,150,243,0.9))}} .pulsing{animation:pulse 1.5s infinite}
+        @keyframes alarmPulse{0%,100%{background:#c62828}50%{background:#f44336}} .alarm-active{animation:alarmPulse 0.5s infinite}
+        
+        .info-box{width:98%;background:#111;padding:8px 10px;border-radius:8px;margin-bottom:10px;border:1px solid #333;box-sizing:border-box;}
+        .progress-bar-bg{width:100%;height:6px;background:#222;border-radius:3px;margin-top:6px;overflow:hidden;}
+        .progress-bar-fill{width:0%;height:100%;background:linear-gradient(to right,#4CAF50,#FF9800);transition:width 1s}
+        .progress-bar-fill-90{width:0%;height:100%;background:linear-gradient(to right,#4CAF50,#F44336)}
+        
+        .speed-section { display:grid; grid-template-columns: 1fr 1fr; gap:10px; width:98%; margin-bottom:10px;}
+        .speed-box { background:#111; border:1px solid #333; border-radius:8px; padding:10px; display:flex; flex-direction:column; align-items:center; position:relative;}
+        .speed-val { font-size:32px; font-weight:bold; color:#fff; line-height:1;}
+        .speed-unit { font-size:12px; color:#aaa; margin-top:4px;}
+        .dist-label { font-size:9px; color:#9C27B0; font-weight:bold; text-transform:uppercase; margin-bottom:4px;}
+        .btn-calibrate { position:absolute; bottom:-8px; background:#9C27B0; color:#fff; font-size:9px; padding:4px 10px; border-radius:10px; border:none; font-weight:bold; cursor:pointer; z-index:5;}
+        
+        .shift-header{background:#1a1a1a;padding:6px 10px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #222;margin:-8px -10px 8px -10px;border-radius:8px 8px 0 0;}
+        .shift-title{font-size:11px;color:#aaa;text-transform:uppercase;font-weight:bold; display:flex; gap:5px; align-items:center;}
+        .badge{color:#fff; font-size:9px; padding:2px 6px; border-radius:4px; display:none; font-weight:bold;}
+        .bg-night{background:#0d47a1;} .bg-crew{background:#E65100; display:block;}
+        .shift-toggle{display:flex;background:#000;border-radius:6px;border:1px solid #333;overflow:hidden}
+        .toggle-btn{padding:4px 12px;font-size:12px;font-weight:bold;color:#888;border:none;background:transparent;cursor:pointer}
+        .toggle-btn.active{background:#2196F3;color:#fff} .toggle-btn.active-green{background:#4CAF50;color:#fff} .toggle-btn.active-orange{background:#FF9800;color:#fff}
+        .shift-details{display:flex;justify-content:space-between;padding:5px 0;}
+        .shift-col{display:flex;flex-direction:column;align-items:center;width:30%} .shift-col .val{font-size:16px;font-weight:bold;margin-top:2px}
+        
+        .days-row{display:flex;justify-content:space-between;width:98%;margin-bottom:15px;gap:4px}
+        .day-chip{background:#1a1a1a;padding:6px 0;flex:1;text-align:center;border-radius:6px;font-size:12px;border:1px solid #333;color:#666;font-weight:bold;cursor:pointer;transition:0.3s;}
+        .day-chip.active{color:#fff;border-color:#2196F3;background:#0d47a1;transform:scale(1.05)}
+        .day-chip.has-data{border-color:#4CAF50; color:#4CAF50;} 
+        
+        .special-modes{width:98%; display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;}
+        .btn-special{flex:1; padding:10px; background:#111; border:1px solid #333; border-radius:8px; text-align:center; font-weight:bold; font-size:12px; color:#aaa; cursor:pointer;}
+        .btn-special.active{background:#222; color:#fff; border-color:#FF9800; box-shadow:0 0 8px rgba(255,152,0,0.3);}
+        .btn-driver-swap{flex-basis: 100%; background:#E65100; color:#fff; border:1px solid #FF9800; padding:12px; margin-top:5px; text-align:center; font-weight:bold; border-radius:8px; cursor:pointer; display:none;}
+        .btn-manual{flex-basis: 100%; background:#311b92; color:#fff; border-color:#651fff; padding:12px; margin-top:5px; text-align:center; border-radius:8px; font-weight:bold; cursor:pointer;}
+
+        .main-controls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;width:98%}
+        .btn-ctrl{height:55px;border:none;border-radius:10px;font-size:12px;font-weight:bold;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:.5;cursor:pointer}
+        .btn-ctrl i{font-size:18px;margin-bottom:2px;font-style:normal}
+        .btn-ctrl.active-mode{opacity:1;box-shadow:0 0 12px currentColor;transform:scale(1.05)}
+        .btn-drive{background:#2e7d32;border:1px solid #4CAF50;color:#4CAF50} .btn-drive.active-mode{color:#fff}
+        .btn-work{background:#1565C0;border:1px solid #2196F3;color:#2196F3} .btn-work.active-mode{color:#fff}
+        .btn-rest{background:#c62828;border:1px solid #EF5350;color:#EF5350} .btn-rest.active-mode{color:#fff}
+        
+        .btn-ferry{padding:8px 16px; background:#111; color:#fff; border:1px solid #333; border-radius:8px; font-weight:bold; cursor:pointer; margin-top:5px;}
+        .btn-ferry.active{background:#FF9800; color:#000; border-color:#F57C00;}
+
+        .split-break-container{display:flex;gap:8px;width:100%;margin-top:8px}
+        .split-part{flex:1;background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:8px;text-align:center;}
+        .fillable-label { font-size:14px; margin-top:6px; font-weight:bold; background:#000; padding:6px; border-radius:4px; border:1px solid #333; color:#fff; position:relative; overflow:hidden; }
+        .fillable-label span { position:relative; z-index:2; }
+        .smart-hint { font-size:11px; color:#FFEB3B; margin-top:8px; text-align:center; font-style:italic;}
+        
+        .rest-box-split{display:flex;gap:8px}
+        .rest-box-half{flex:1;background:#1a1a1a;border-radius:8px;border:1px solid #333;display:flex;flex-direction:column;align-items:center;padding-bottom:8px;}
+        .rest-box-header{background:#222;width:100%;padding:4px 0;text-align:center;font-size:10px;color:#aaa;font-weight:bold;margin-bottom:8px;}
+        
+        /* SLIDE MENU (ДИНАМИЧНО ТАБЛО) */
+        .menu-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:9998; }
+        #slide-menu { position:fixed; top:0; right:-320px; width:300px; height:100%; background:#111; z-index:9999; transition:right 0.3s ease; padding:20px; border-left:2px solid #333; overflow-y:auto; box-sizing:border-box; display:flex; flex-direction:column; }
+        #slide-menu.open { right:0; }
+        .menu-title { font-size:16px; color:#2196F3; font-weight:bold; margin-bottom:15px; text-transform:uppercase; border-bottom:1px solid #333; padding-bottom:10px; display:flex; justify-content:space-between;}
+        .menu-close { background:transparent; border:none; color:#fff; font-size:20px; cursor:pointer; }
+        .menu-item { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #222; }
+        .menu-item span { font-size:14px; color:#ccc; }
+        .sort-btn { background:#222; border:1px solid #444; color:#fff; cursor:pointer; padding:2px 8px; border-radius:4px; font-size:12px;}
+        .sort-btn:disabled { opacity:0.3; cursor:not-allowed; }
+        .scale-slider-container { margin-top: 15px; border-top: 1px solid #333; padding-top: 15px; display:flex; flex-direction:column; gap:8px;}
+
+        /* НОЩЕН РЕЖИМ ЗА ЦВЕТОВЕ (Тъмно зелено) */
+        body.night-mode .bg-green { background: #228B22 !important; border-color: #1b5e20 !important; }
+        body.night-mode .circle-progress { stroke: #228B22 !important; }
+        body.night-mode .btn-drive { background: #1b5e20 !important; border-color: #228B22 !important; color: #228B22 !important; }
+        body.night-mode .btn-drive.active-mode { color: #fff !important; }
+        body.night-mode #top-status-dot { background: #228B22 !important; }
+        body.night-mode #daily-limit-display { color: #228B22 !important; }
+        body.night-mode #daily-progress { background: linear-gradient(to right, #228B22, #FF9800) !important; }
+
+        /* ОТЧЕТИ */
+        .report-card { background:#1a1a1a; width:95%; border-radius:10px; border:1px solid #333; padding:15px; margin-top:10px; box-sizing:border-box; }
+        .report-header { border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;}
+        .report-header h2 { margin:0; font-size:18px; color:#2196F3; }
+        .report-row { display:flex; justify-content:space-between; margin-bottom:8px; font-size:14px; }
+        .report-row.highlight { color:#4CAF50; font-weight:bold; font-size:16px;}
+        .violation-list { background: rgba(244,67,54,0.1); border-left: 4px solid #F44336; padding: 10px; border-radius:4px; margin-top: 5px; }
+        .violation-item { color: #F44336; font-size: 13px; font-weight:bold; margin-bottom:4px; }
+        .fine-text { color: #FF9800; font-size: 11px; display:block; padding-left:18px; margin-bottom:8px;}
+        .compliant-box { background: rgba(76,175,80,0.1); border-left: 4px solid #4CAF50; padding: 10px; border-radius:4px; color: #4CAF50; font-size: 14px; font-weight: bold; margin-top: 5px; text-align:center; }
+        .joker-report-row { display:flex; justify-content:space-around; background:#000; padding:8px; border-radius:6px; border:1px solid #333; margin-top:10px;}
+        .jkr-item { text-align:center; font-size:11px; color:#aaa; font-weight:bold;}
+        .jkr-item span { display:block; font-size:16px; color:#fff;}
+        .joker-header-rep { font-size:12px; color:#9C27B0; font-weight:bold; text-align:center; text-transform:uppercase; margin-top:15px; border-top:1px solid #333; padding-top:10px; }
+        .notes-area { width: 100%; background: #000; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 10px; margin-top: 10px; font-family: inherit; resize: vertical; min-height: 100px; box-sizing: border-box; font-size:14px; }
+        .btn-save-note { background: #4CAF50; color: white; border: none; border-radius: 6px; padding: 10px 20px; font-weight: bold; margin-top: 8px; cursor: pointer; float: right; }
+        .btn-share { background: #2196F3; color: white; border: none; border-radius: 6px; padding: 12px; font-weight: bold; width:100%; margin-top: 20px; font-size:16px; cursor: pointer; }
+        
+        /* MODALS */
+        #overspeed-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:#fff; z-index:10005;flex-direction:column;align-items:center;justify-content:center;padding:20px; box-sizing:border-box; border:15px solid #F44336;}
+        .os-title { font-size:35px; font-weight:900; text-align:center; color:#F44336; text-transform:uppercase; margin-bottom:10px;}
+        .os-speed { font-size:60px; font-weight:900; color:#F44336; margin-bottom:10px; }
+        .os-timer { font-size:120px; font-weight:900; color:#F44336; line-height:1;}
+        .os-controls { display:grid; grid-template-columns: 1fr 1fr; gap:10px; width:100%; margin-top:30px;}
+        .os-btn { background:#fff; color:#F44336; border:3px solid #F44336; padding:15px; border-radius:10px; font-weight:bold; font-size:14px; cursor:pointer; text-transform:uppercase;}
+
+        #border-modal {display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(33,150,243,0.95);z-index:10002;flex-direction:column;align-items:center;justify-content:center;padding:20px; box-sizing:border-box;}
+        .border-title { font-size:32px; font-weight:900; color:#fff; text-align:center; margin-bottom:10px; text-transform:uppercase;}
+        .border-country { font-size:60px; font-weight:900; color:#FFEB3B; margin-bottom:20px; text-transform:uppercase; text-align:center;}
+
+        #warning-modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(255,152,0,0.95); z-index:10001; flex-direction:column; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;}
+        .warn-title { font-size:35px; font-weight:900; color:#000; text-align:center; margin-bottom:20px; text-transform:uppercase;}
+        .warn-text { font-size:22px; font-weight:bold; color:#000; text-align:center; background:rgba(255,255,255,0.3); padding:20px; border-radius:10px; margin-bottom:30px;}
+        .btn-warn-ok { background:#000; color:#FF9800; font-size:20px; font-weight:bold; padding:15px 40px; border-radius:10px; border:none; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,0.5);}
+
+        #calib-modal, #manual-modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:10000; flex-direction:column; align-items:center; justify-content:center; padding:20px;}
+        .calib-card { background:#222; padding:20px; border-radius:15px; width:90%; border:1px solid #9C27B0;}
+        .calib-input { width:100%; padding:12px; margin:10px 0; background:#000; border:1px solid #444; color:#fff; border-radius:8px; font-size:18px; text-align:center;}
+        
+        /* BLE Лог */
+        #ble-log { width: 95%; background: #000; color: #4CAF50; border: 1px solid #333; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; height: 80px; overflow-y: auto; margin-top: 10px; display:none; }
+    </style>
+</head>
+<body>
+
+<div class="menu-overlay" id="menu-overlay" onclick="closeMenu()"></div>
+<div id="slide-menu">
+    <div class="menu-title"><span id="menu-title-text">⚙️ Подредба (Каране)</span> <button class="menu-close" onclick="closeMenu()">×</button></div>
+    <div style="font-size:11px; color:#888; margin-bottom:15px;">Размести модулите със стрелките. Изключените модули продължават да отчитат аларми на фон!</div>
+    <div id="menu-items-container"></div>
+    <div class="scale-slider-container">
+        <label for="ui-scaler" style="font-size:12px; color:#aaa; font-weight:bold;">Размер на модулите (Мащаб): <span id="scale-val-display" style="color:#2196F3;">100%</span></label>
+        <input type="range" id="ui-scaler" min="0.7" max="1.3" step="0.05" value="1" oninput="changeScale(this.value)">
+    </div>
+    
+    <div style="margin-top: 15px; border-top: 1px solid #333; padding-top: 15px;">
+        <div class="menu-item">
+            <span style="font-weight:bold; color:#4CAF50;">🌙 Тъмно зелено (Нощ)</span>
+            <label class="switch"><input type="checkbox" onchange="document.body.classList.toggle('night-mode')"><span class="slider"></span></label>
+        </div>
+    </div>
+</div>
+
+<div id="overspeed-modal">
+    <div class="os-title">НАМАЛИ СКОРОСТТА!</div>
+    <div class="os-speed" id="os-speed-display">91 км/ч</div>
+    <div class="os-timer" id="os-timer">30</div>
+    <div class="os-controls">
+        <button class="os-btn" onclick="muteOverspeed(5)">⏳ 5 МИН</button>
+        <button class="os-btn" onclick="muteOverspeed('stop')">🛑 ДО ПОКОЙ</button>
+        <button class="os-btn" style="grid-column: span 2;" onclick="muteOverspeed('today')">🗓️ СПРИ ЗА ДНЕС</button>
+    </div>
+</div>
+
+<div id="border-modal">
+    <div class="border-title">🌍 Пресечена Граница!</div>
+    <div style="color:#fff; font-size:18px; text-align:center;">Нова държава:</div>
+    <div class="border-country" id="border-country-name">---</div>
+    <div style="color:#fff; font-size:16px; text-align:center; font-weight:bold; margin-bottom:30px;">Въведи кода в тахографа сега!</div>
+    <button class="btn-warn-ok" style="background:#FFEB3B; color:#000;" onclick="closeBorderModal()">ВЪВЕДОХ ДЪРЖАВАТА</button>
+</div>
+
+<div id="warning-modal">
+    <div class="warn-title">⚠️ Внимание!</div>
+    <div class="warn-text" id="warning-msg-text">--</div>
+    <button class="btn-warn-ok" onclick="closeWarningModal()">РАЗБРАХ</button>
+</div>
+
+<div id="calib-modal">
+    <div class="calib-card">
+        <h3 style="color:#9C27B0; margin-top:0;">Калибриране на скоростта</h3>
+        <input type="number" id="input-truck-km" class="calib-input" placeholder="Тахограф (км)">
+        <input type="number" id="input-gps-km" class="calib-input" placeholder="GPS (км)">
+        <div style="display:flex; gap:10px; margin-top:10px;"><button class="os-btn" style="flex:1; border-color:#4CAF50; color:#4CAF50;" onclick="applyCalibration()">ЗАПАЗИ</button><button class="os-btn" style="flex:1;" onclick="closeCalib()">ОТКАЗ</button></div>
+    </div>
+</div>
+
+<div id="manual-modal">
+    <div class="calib-card" style="border-color:#311b92;">
+        <h3 style="color:#651fff; margin-top:0;">Ръчно Въвеждане</h3>
+        <div style="font-size:11px; color:#aaa; margin-bottom:10px;">*Ще бъде маркирано като [ВЪВЕДЕНО РЪЧНО] в отчета.</div>
+        <input type="number" id="input-man-drive" class="calib-input" placeholder="Добави Каране (Минути)">
+        <input type="number" id="input-man-work" class="calib-input" placeholder="Добави Работа (Минути)">
+        <div style="display:flex; gap:10px; margin-top:10px;"><button class="os-btn" style="flex:1; border-color:#4CAF50; color:#4CAF50;" onclick="applyManualEntry()">ДОБАВИ</button><button class="os-btn" style="flex:1;" onclick="closeManualModal()">ОТКАЗ</button></div>
+    </div>
+</div>
+
+<div id="main-view">
+    <div class="top-controls" id="mod-top-controls">
+        <div class="gps-toggle-wrapper"><span style="font-size:9px; color:#aaa;">GPS АВТО</span><label class="switch"><input type="checkbox" id="gps-toggle" onchange="toggleGPS(this)"><span class="slider"></span></label></div>
+        <div class="date-title" style="margin-top:0;">
+            <span id="report-date-text" style="font-size:16px;">Отчет: Днес</span>
+            <div class="live-status" id="top-status-badge" style="justify-content:center;"><div class="live-dot" id="top-status-dot"></div> <span id="top-status-text">Спрял</span></div>
+        </div>
+        <button class="btn-menu" onclick="openMenu()">☰ Меню</button>
+    </div>
+
+    <div class="scale-wrapper" id="dynamic-container">
+        
+        <div class="header" id="mod-jokers" style="margin-top:10px; width:100%;">
+            <div class="joker-wrapper"><div class="joker-label">10ч Каране</div><div class="btn-joker bg-green" id="joker-10-btn"><div class="big-num">10</div><div class="small-text" id="joker-10-text">2 бр.</div></div></div>
+            <div class="joker-wrapper"><div class="joker-label">Смяна</div><div class="btn-joker bg-green" id="joker-15-btn"><div class="big-num">15</div><div class="small-text" id="joker-15-text">2 бр.</div></div></div>
+            <div class="joker-wrapper"><div class="joker-label">9ч Пауза</div><div class="btn-joker bg-green" id="joker-9-btn"><div class="big-num">9</div><div class="small-text" id="joker-9-text">3 бр.</div></div></div>
+        </div>
+
+        <div class="start-buttons-container" id="mod-start-btns">
+            <div class="btn-course" id="btn-new-course" onclick="handleNewCourse()">📅 НОВ КУРС</div>
+            <div class="btn-shift" id="btn-shift-startstop" onclick="handleShiftToggle()">🏁 СТАРТ СМЯНА</div>
+            <button class="btn-ble" id="btn-ble-connect" onclick="connectTachoBLE()">📡 ВЪРЖИ ТАХОГРАФ</button>
+            <button onclick="downloadTachoLogs()" style="background:#00897B; color:#fff; padding:15px; width:100%; border-radius:10px; font-weight:bold; margin-top:10px; border:none; cursor:pointer;">💾 ЗАПАЗИ ЛОГА В ТЕЛЕФОНА</button>
+        </div>
+        
+        <div id="ble-log">Изчаква се връзка с тахограф...</div>
+
+        <div class="tacho-container" id="mod-tacho" onclick="handleMainCircleClick()">
+            <svg class="circle-svg"><circle class="circle-bg" cx="95" cy="95" r="85"></circle><circle class="circle-progress" id="tacho-ring-main" cx="95" cy="95" r="85"></circle></svg>
+            <div class="tacho-text">
+                <div class="label" id="tacho-label">Оставащо Каране</div>
+                <div class="time-big" id="main-timer-text" onclick="toggleTimerMode(event)">04:30</div>
+                <div class="label" id="timer-status" style="margin-top:2px; color:#4CAF50; font-weight:bold;">РЪЧЕН РЕЖИМ</div>
+            </div>
+        </div>
+        
+        <div class="info-box" id="mod-radio" style="border-left: 4px solid #00BCD4; margin-bottom: 10px; text-align:center;">
+            <div style="color:#00BCD4; font-weight:bold; margin-bottom:10px;">📻 ГЛОБАЛНА СТАНЦИЯ</div>
+            <div style="display:flex; gap:10px; margin-bottom:10px;">
+                <input type="text" id="radio-channel-input" placeholder="Канал (напр. 25 или sofia-arad)" value="25" style="flex:1; background:#000; border:1px solid #00BCD4; color:#fff; border-radius:8px; padding:8px; text-align:center; font-weight:bold;">
+                <button id="btn-radio-connect" onclick="toggleRadioConnection()" style="background:#00BCD4; color:#000; border:none; font-weight:bold; border-radius:8px; padding:8px 15px; cursor:pointer;">СВЪРЖИ</button>
+            </div>
+            <button id="btn-ptt" style="background:#222; border: 4px solid #00BCD4; color:#fff; width:100%; height:100px; border-radius:15px; font-size:20px; font-weight:bold; cursor:pointer; user-select: none; touch-action: none; opacity:0.5;" disabled>
+                🎤 ИЗЧАКВАНЕ...
+            </button>
+        </div>
+
+        <div class="info-box" id="mod-daily">
+            <div style="display:flex; justify-content:space-between;"><span class="label">Дневно каране</span><span style="font-size:12px; font-weight:bold;"><span id="daily-driven-text">00:00</span> / <span id="daily-limit-display" style="color:#4CAF50">09:00</span></span></div>
+            <div class="progress-bar-bg"><div class="progress-bar-fill" id="daily-progress" style="background: #4CAF50;"></div></div>
+        </div>
+
+        <div class="info-box" id="mod-shift" style="border-left: 4px solid #2196F3;">
+            <div class="shift-header"><span class="shift-title" style="color:#fff;">Работна смяна <span class="badge bg-night" id="night-badge">НОЩНА</span> <span class="badge bg-crew" id="crew-badge" style="display:none;">ВОДАЧ 1</span></span>
+                <div class="shift-toggle"><button class="toggle-btn active" id="btn-shift-13h" onclick="changeShiftLimit(13)">13 ч</button><button class="toggle-btn" id="btn-shift-15h" onclick="changeShiftLimit(15)">15 ч</button></div>
+            </div>
+            <div class="shift-details">
+                <div class="shift-col"><span class="label">Старт</span><span class="val" id="shift-start-text">--:--</span></div>
+                <div class="shift-col"><span class="label">Изминало</span><span class="val" id="shift-elapsed-text" style="color:#2196F3;">--:--</span></div>
+                <div class="shift-col"><span class="label">Край до</span><span class="val" id="shift-end-text">--:--</span></div>
+            </div>
+        </div>
+
+        <div class="speed-section" id="mod-speed">
+            <div class="info-box" style="grid-column: span 2; margin-bottom:0; display:flex; justify-content:space-between; align-items:center; background:#1b5e20; border-color:#4CAF50;">
+                 <span class="dist-label" style="margin:0; color:#fff; font-size:12px;">Пробег Смяна:</span>
+                 <span id="shift-dist-text" style="font-weight:bold; color:#fff; font-size:20px;">0.0 км</span>
+            </div>
+            <div class="speed-box">
+                <span class="dist-label">Текуща Скорост</span><span class="speed-val" id="current-speed-text">0</span><span class="speed-unit">км/ч</span>
+                <button class="btn-calibrate" onclick="openCalib()">КАЛИБРИРАЙ</button>
+            </div>
+            <div class="speed-box">
+                <span class="dist-label">Пробег Курс</span><span class="speed-val" id="course-dist-text" style="font-size:24px;">0.0</span><span class="speed-unit">общо</span>
+            </div>
+        </div>
+
+        <div class="special-modes" id="mod-special">
+            <div class="btn-special" id="btn-mode-crew" onclick="toggleCrewMode()">👥 ДВОЙКА</div>
+            <div class="btn-special" id="btn-mode-out" onclick="toggleOutMode()">🚫 OUT</div>
+            <div class="btn-driver-swap" id="btn-swap-driver" onclick="swapCrewDriver()">🔄 ПРЕДАЙ ВОЛАНА (Смяна Водач)</div>
+        </div>
+
+        <div style="display:flex; width:98%; gap:10px;" id="mod-weekly">
+            <div class="info-box" style="border-left: 4px solid #FF9800; flex:1; margin-bottom:0;">
+                <div style="display:flex; justify-content:space-between;"><span class="label">Седмица (56ч)</span><span style="font-size:12px; font-weight:bold;"><span id="weekly-text">00:00</span> / <span style="color:#FF9800">56:00</span></span></div>
+                <div class="progress-bar-bg"><div class="progress-bar-fill-90" id="weekly-progress" style="background:linear-gradient(to right,#4CAF50,#FF9800)"></div></div>
+            </div>
+            <div class="info-box" style="border-left: 4px solid #F44336; flex:1; margin-bottom:0;">
+                <div style="display:flex; justify-content:space-between;"><span class="label">2-Седмици (90ч)</span><span style="font-size:12px; font-weight:bold;"><span id="biweekly-text">00:00</span> / <span style="color:#F44336">90:00</span></span></div>
+                <div class="progress-bar-bg"><div class="progress-bar-fill-90" id="biweekly-progress"></div></div>
+            </div>
+        </div>
+
+        <div class="days-row" id="mod-calendar" style="margin-top:15px;"></div>
+
+    </div> 
+    <div class="main-controls" id="mod-controls" style="margin-top:10px;">
+        <button class="btn-ctrl btn-drive active-mode" id="btn-nav-main" onclick="navTo('main')"><i>🚚</i> КАРАНЕ</button>
+        <button class="btn-ctrl btn-work" id="btn-state-work" onclick="setManualState('work')"><i>🔨</i> РАБОТА</button>
+        <button class="btn-ctrl btn-rest" id="btn-nav-rest" onclick="navTo('rest')"><i>☕</i> ПОЧИВКИ</button>
+    </div>
+</div>
+
+<div id="rest-view">
+    <div class="top-controls" style="margin-bottom:5px;">
+        <div style="width:60px;"><button style="background:transparent; border:1px solid #444; color:#aaa; padding:6px 10px; border-radius:8px; font-weight:bold; cursor:pointer;" onclick="navTo('main')">◀ Назад</button></div>
+        <div class="date-title" style="color:#2196F3; margin-top:0; font-size:16px;">ЕКРАН: ПОЧИВКИ<br>
+            <div style="font-size:10px; color:#FF9800; margin-top:4px;">До задълж. седмична: <span id="time-to-144h" style="font-weight:bold; color:#fff;">--:--</span></div>
+        </div>
+        <button class="btn-menu" onclick="openMenu()">☰ Меню</button>
+    </div>
+
+    <div class="scale-wrapper" id="dynamic-container-rest">
+        
+        <div class="header" id="mod-rest-jokers" style="justify-content:center; margin-top:10px;">
+            <div class="joker-wrapper"><div class="joker-label">9ч Пауза</div><div class="btn-joker bg-green" id="joker-9-btn-rest"><div class="big-num" id="joker-9-num-rest">9</div><div class="small-text" id="joker-9-text-rest">3 бр.</div></div></div>
+        </div>
+
+        <div class="tacho-container pulsing" id="mod-rest-tacho" onclick="setManualState('drive')">
+            <svg class="circle-svg"><circle class="circle-bg" cx="95" cy="95" r="85"></circle><circle class="circle-progress" style="stroke:#2196F3; filter:drop-shadow(0 0 8px rgba(33,150,243,0.6));" cx="95" cy="95" r="85"></circle></svg>
+            <div class="tacho-text">
+                <div class="label" style="color:#bbb;">ПОЧИВКА</div>
+                <div class="time-big" style="color:#2196F3;" id="rest-timer-text">00:00</div>
+                <div class="label" style="font-size:8px; margin-top:2px;">(Цъкни за Каране)</div>
+            </div>
+        </div>
+
+        <div class="special-modes" id="mod-rest-special" style="margin-bottom:5px;">
+            <div class="btn-ferry" id="btn-mode-ferry" onclick="toggleFerryMode()" style="flex:1; margin-top:0; text-align:center;">🚢 РЕЖИМ ФЕРИБОТ</div>
+            <div class="btn-special btn-manual" onclick="openManualModal()">✍️ РЪЧНО ВЪВЕЖДАНЕ</div>
+        </div>
+
+        <div class="info-box" id="mod-rest-info45" style="margin-top:5px; border-left:4px solid #4CAF50;">
+            <div style="text-align:center; color:#4CAF50; font-size:11px; font-weight:bold;">СТАНДАРТНА ПАУЗА (45 МИН)</div>
+            <div class="fillable-label" id="label-45m" style="text-align:center;"><span>Край: --:--</span></div>
+            <div class="smart-hint" id="hint-split" style="display:none;">💡 Направи 15 мин. По-късно ще трябват още 30 мин.</div>
+        </div>
+        
+        <div class="info-box" id="mod-rest-split"><div style="text-align:center; font-size:11px; color:#aaa; font-weight:bold;">РАЗДЕЛЕНА ПАУЗА (15 + 30 МИН)</div>
+            <div class="split-break-container">
+                <div class="split-part" style="border-color:#4CAF50;"><div style="font-size:16px; font-weight:bold; color:#4CAF50;">15 мин</div><div class="fillable-label" id="label-15m"><span>Край: --:--</span></div></div>
+                <div class="split-part" style="border-color:#2196F3;"><div style="font-size:16px; font-weight:bold; color:#2196F3;">30 мин</div><div class="fillable-label" id="label-30m"><span>Край: --:--</span></div></div>
+            </div>
+        </div>
+        
+        <div class="info-box" id="mod-rest-dailysplit"><div style="text-align:center; font-size:11px; color:#aaa; font-weight:bold;">РАЗДЕЛЕНА ДНЕВНА (3 + 9 ЧАСА)</div>
+            <div class="split-break-container">
+                <div class="split-part" style="border-color:#4CAF50;"><div style="font-size:16px; font-weight:bold; color:#4CAF50;">3 часа</div><div class="fillable-label" id="label-3h"><span>Край: --:--</span></div></div>
+                <div class="split-part" style="border-color:#2196F3;"><div style="font-size:16px; font-weight:bold; color:#2196F3;">9 часа</div><div class="fillable-label" id="label-9h-split"><span>Край: --:--</span></div></div>
+            </div>
+        </div>
+        
+        <div class="info-box" id="mod-rest-weekly" style="padding:10px; border:none; background:transparent;">
+            <div class="rest-box-split">
+                <div class="rest-box-half" style="border-bottom:3px solid #4CAF50;">
+                    <div class="rest-box-header">Цяла Дневна</div>
+                    <div class="shift-toggle" style="margin-bottom:6px;"><button class="toggle-btn" id="btn-rest-9h" onclick="changeRestSelection(9)">9 ч</button><button class="toggle-btn active-green" id="btn-rest-11h" onclick="changeRestSelection(11)">11 ч</button></div>
+                    <div class="fillable-label" id="label-daily" style="width:80%;"><span>Край: --:--</span></div>
+                </div>
+                <div class="rest-box-half" style="border-bottom:3px solid #FF9800;">
+                    <div class="rest-box-header">Седмична</div>
+                    <div class="shift-toggle" style="margin-bottom:6px;"><button class="toggle-btn" id="btn-rest-24h" onclick="changeRestWeekly(24)">24 ч</button><button class="toggle-btn active-orange" id="btn-rest-45h" onclick="changeRestWeekly(45)">45 ч</button></div>
+                    <div class="fillable-label" id="label-weekly" style="width:80%;"><span>Край: --:--</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="report-view">
+    <div class="header">
+        <div style="width:60px;"><button style="background:transparent; border:1px solid #444; color:#aaa; padding:6px 10px; border-radius:8px; font-weight:bold; cursor:pointer;" onclick="navTo('main')">◀ Назад</button></div>
+        <div class="date-title" style="color:#FF9800; margin-top:0;">ДНЕВЕН ОТЧЕТ</div>
+        <div style="width:60px;"></div>
+    </div>
+    
+    <div class="report-card">
+        <div class="report-header"><h2 id="rep-date">Сряда, 11 Март</h2><div style="font-size:12px; color:#aaa;" id="rep-status">Завършен</div></div>
+        
+        <div class="report-row"><span style="color:#888;">Локация Старт:</span> <span id="rep-loc-start" style="color:#fff; font-size:12px; text-align:right;">--</span></div>
+        <div class="report-row"><span style="color:#888;">Старт на смяна:</span> <span id="rep-start" style="color:#fff;">--:--</span></div>
+        <hr style="border:0; border-top:1px dashed #333; margin:5px 0;">
+        <div class="report-row"><span style="color:#888;">Локация Край:</span> <span id="rep-loc-end" style="color:#fff; font-size:12px; text-align:right;">--</span></div>
+        <div class="report-row"><span style="color:#888;">Край на смяна:</span> <span id="rep-end" style="color:#fff;">--:--</span></div>
+        
+        <div class="report-row" style="margin-top:10px;"><span style="color:#888;">Продължителност:</span> <span id="rep-length" style="color:#2196F3;">--:-- ч.</span></div>
+        <div class="report-row"><span style="color:#888;">РАБОТНО ВРЕМЕ:</span> <span id="rep-work" style="color:#FFEB3B; font-weight:bold;">--:-- ч.</span></div>
+        
+        <hr style="border:0; border-top:1px solid #333; margin:10px 0;">
+        <div class="report-row highlight"><span style="color:#888;">Дневно Каране:</span> <span id="rep-drive">--:-- ч.</span></div>
+        <div class="report-row highlight" style="color:#9C27B0;"><span style="color:#888;">Пробег Смяна:</span> <span id="rep-dist">-- км</span></div>
+        
+        <div class="joker-header-rep">РАЗПОЛАГАМЕ С:</div>
+        <div class="joker-report-row">
+            <div class="jkr-item">10ч КАРАНЕ<br><span id="rep-jk-10">--</span></div>
+            <div class="jkr-item" style="border-left:1px solid #333; padding-left:10px;">15ч СМЯНА<br><span id="rep-jk-15">--</span></div>
+            <div class="jkr-item" style="border-left:1px solid #333; padding-left:10px;">9ч ПАУЗА<br><span id="rep-jk-9">--</span></div>
+        </div>
+        
+        <div style="margin-top:15px; border-top:1px solid #333; padding-top:10px;">
+            <span style="color:#aaa; font-size:12px; text-transform:uppercase;">Проверка на регламента:</span>
+            <div id="rep-compliance"></div>
+            <div id="rep-manual-flag" style="display:none; color:#b388ff; font-size:12px; font-weight:bold; margin-top:5px; text-align:center;">⚠️ Има [ВЪВЕДЕНО РЪЧНО] време</div>
+        </div>
+        
+        <div style="margin-top:15px; border-top:1px solid #333; padding-top:10px; display:flex; flex-direction:column;">
+            <span style="color:#aaa; font-size:12px; text-transform:uppercase;">Бележки:</span>
+            <textarea id="rep-notes" class="notes-area" placeholder="Напиши бележка..."></textarea>
+            <div style="overflow:auto;"><button class="btn-save-note" onclick="handleSaveNote()">Запази</button></div>
+        </div>
+        
+        <button class="btn-share" onclick="shareReport()">📤 Сподели Отчета с Диспечер</button>
+    </div>
+    <div class="days-row" id="calendar-row-report" style="margin-top:20px;"></div>
+</div>
+
+<script>
+// ==================== ЛОГИКА И ДАННИ ====================
+const MAX_DRIVE = 16200, DAILY_STD = 32400, DAILY_TEN = 36000, WEEKLY_MAX = 201600, BIWEEKLY_MAX = 324000;
+let currentState = 'rest'; let currentView = 'main'; let modeStartTime = Date.now();
+let baseDriveTime = 0, baseDailyDrive = 0, baseWeeklyDrive = 0, baseBiWeeklyDrive = 0, baseRestTime = 0, baseWorkTime = 0;
+let shiftStartedAt = null, shiftLengthLimit = 13, isNightShift = false;
+let startLocation = "", endLocation = "", currentReportDate = null;
+let lastWeeklyRestEnd = Date.now(); 
+
+let warn144_24h = false, warn144_12h = false, warn144_4h = false;
+let isTimerElapsed = false;
+
+// Настройки
+let gpsEnabled = false, isCrewMode = false, currentDriver = 1, isOutMode = false, isFerryMode = false, isShiftActive = false;
+let jokers = { '10h': 2, '15h': 2, '9h': 3 };
+let currentRestSel = 11, currentWeeklySel = 45;
+let courseDistance = 0.0, shiftDistance = 0.0, calibFactor = 1.0;
+let totalDistance = 0.0, lastLat = null, lastLon = null, watchId = null;
+let currentCountryCode = ""; let hasManualEntryToday = false;
+
+// ДИНАМИЧНО ТАБЛО CONFIG - КАРАНЕ
+const modNames = {
+    'mod-jokers': 'Жокери (Горе)', 'mod-start-btns': 'Старт Бутони', 'mod-tacho': 'Главен Тахограф', 'mod-radio': 'Глобално Радио', 'mod-daily': 'Дневно Каране',
+    'mod-shift': 'Работна Смяна', 'mod-speed': 'Скорост и Пробег', 'mod-special': 'Специални Режими', 'mod-weekly': 'Седмични Лимити', 'mod-calendar': 'Календар'
+};
+let defaultOrder = ['mod-jokers', 'mod-start-btns', 'mod-tacho', 'mod-radio', 'mod-daily', 'mod-shift', 'mod-speed', 'mod-special', 'mod-weekly', 'mod-calendar'];
+let uiOrder = [];
+let uiConfig = { 'mod-jokers': true, 'mod-start-btns': true, 'mod-tacho': true, 'mod-radio': true, 'mod-daily': true, 'mod-shift': true, 'mod-speed': true, 'mod-special': true, 'mod-weekly': true, 'mod-calendar': true };
+
+// ДИНАМИЧНО ТАБЛО CONFIG - ПОЧИВКИ
+const modNamesRest = {
+    'mod-rest-jokers': 'Жокери', 'mod-rest-tacho': 'Таймер Почивка', 'mod-rest-special': 'Ръчно / Ферибот', 'mod-rest-info45': '45 Мин Пауза',
+    'mod-rest-split': '15+30 Мин', 'mod-rest-dailysplit': '3+9 Часа', 'mod-rest-weekly': 'Дневна / Седмична'
+};
+let defaultOrderRest = ['mod-rest-jokers', 'mod-rest-tacho', 'mod-rest-special', 'mod-rest-info45', 'mod-rest-split', 'mod-rest-dailysplit', 'mod-rest-weekly'];
+let uiOrderRest = [];
+let uiConfigRest = { 'mod-rest-jokers': true, 'mod-rest-tacho': true, 'mod-rest-special': true, 'mod-rest-info45': true, 'mod-rest-split': true, 'mod-rest-dailysplit': true, 'mod-rest-weekly': true };
+
+let globalScale = 1.0;
+
+let overspeedMutedUntil = 0; let muteUntilStop = false; let muteForToday = false;
+let osCounter = 30; let isOsActive = false;
+let warning4h15mShown = false; let isEngineOn = false; let lastMotionTime = Date.now(); let wakeLock = null;
+let shiftHistory = {};
+
+// 1. Масив, в който ще трупаме всичко, което тахографът прати
+let rawTachoLogs = [];
+
+// 2. Обнови твоята функция handleFIFOIndication:
+function handleFIFOIndication(event) {
+    let data = new Uint8Array(event.target.value.buffer);
+    // Превръщаме байтовете в четим шестнадесетичен формат (HEX)
+    let hexString = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
+    
+    let timestamp = new Date().toISOString();
+    let logLine = `[${timestamp}] BLE_RAW: ${hexString}`;
+    
+    logBLE(logLine); // Показва го в черното прозорче на екрана
+    rawTachoLogs.push(logLine); // Запазва го в масива
+}
+
+// 3. ФУНКЦИЯ ЗА ИЗТЕГЛЯНЕ НА ФАЙЛА В ТЕЛЕФОНА
+function downloadTachoLogs() {
+    if (rawTachoLogs.length === 0) {
+        alert("Няма събрани данни от тахографа!"); return;
+    }
+    // Създаваме текстов файл в паметта на браузъра
+    let blob = new Blob([rawTachoLogs.join('\n')], { type: 'text/plain' });
+    let url = URL.createObjectURL(blob);
+    
+    // Симулираме натискане на линк, за да се изтегли в папка Downloads
+    let a = document.createElement('a');
+    a.href = url;
+    a.download = `Tacho_Log_${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// ==================== ЗАРЕЖДАНЕ ====================
+function loadData() {
+    shiftHistory = JSON.parse(localStorage.getItem('th_history')) || {};
+    gpsEnabled = localStorage.getItem('th_gps') === 'true';
+    isCrewMode = localStorage.getItem('th_crew') === 'true';
+    currentDriver = parseInt(localStorage.getItem('th_driver')) || 1;
+    isShiftActive = localStorage.getItem('th_shift_active') === 'true';
+    shiftStartedAt = localStorage.getItem('th_shift_start');
+    isNightShift = localStorage.getItem('th_night_shift') === 'true';
+    lastWeeklyRestEnd = parseInt(localStorage.getItem('th_last_weekly_rest')) || Date.now();
+    warn144_24h = localStorage.getItem('th_w144_24') === 'true'; warn144_12h = localStorage.getItem('th_w144_12') === 'true'; warn144_4h = localStorage.getItem('th_w144_4') === 'true';
+    hasManualEntryToday = localStorage.getItem('th_manual_today') === 'true';
+    
+    let savedScale = parseFloat(localStorage.getItem('th_scale'));
+    if(!isNaN(savedScale)) { globalScale = savedScale; document.documentElement.style.setProperty('--ui-scale', globalScale); document.getElementById('ui-scaler').value = globalScale; document.getElementById('scale-val-display').innerText = Math.round(globalScale*100) + "%"; }
+
+    // Зареждане и "Умно зашиване" на новите модули към старото запазено меню
+    let savedOrder = localStorage.getItem('th_uiorder'); 
+    if(savedOrder) {
+        let parsedOrder = JSON.parse(savedOrder);
+        // Добавяме всеки нов модул от defaultOrder, който липсва в запазения ред
+        defaultOrder.forEach(id => { if(!parsedOrder.includes(id)) parsedOrder.push(id); });
+        uiOrder = parsedOrder;
+    } else {
+        uiOrder = [...defaultOrder];
+    }
+    
+    let savedCfg = localStorage.getItem('th_uicfg'); 
+    if(savedCfg) {
+        // Сливаме запазените настройки с тези по подразбиране (за да не се скрият новите модули завинаги)
+        uiConfig = { ...uiConfig, ...JSON.parse(savedCfg) };
+    }
+    
+    let savedOrderRest = localStorage.getItem('th_uiorder_rest'); if(savedOrderRest) uiOrderRest = JSON.parse(savedOrderRest); else uiOrderRest = [...defaultOrderRest];
+    let savedCfgRest = localStorage.getItem('th_uicfg_rest'); if(savedCfgRest) uiConfigRest = JSON.parse(savedCfgRest);
+
+    let lastWeek = localStorage.getItem('th_last_week'); let currentWeek = getWeekNumber(new Date());
+    if(lastWeek && currentWeek != lastWeek) { jokers['10h'] = 2; jokers['15h'] = 2; jokers['9h'] = 3; baseWeeklyDrive = 0; } 
+    else { jokers = JSON.parse(localStorage.getItem('th_jokers')) || jokers; baseWeeklyDrive = parseInt(localStorage.getItem('th_weekly_drive')) || 0; }
+    localStorage.setItem('th_last_week', currentWeek);
+    
+    baseDailyDrive = parseInt(localStorage.getItem('th_daily_drive')) || 0; baseBiWeeklyDrive = parseInt(localStorage.getItem('th_biweekly_drive')) || 0; baseWorkTime = parseInt(localStorage.getItem('th_work_time')) || 0;
+    courseDistance = parseFloat(localStorage.getItem('th_course_dist')) || 0.0; shiftDistance = parseFloat(localStorage.getItem('th_shift_dist')) || 0.0; calibFactor = parseFloat(localStorage.getItem('th_calib')) || 1.0;
+    
+    currentState = 'rest'; modeStartTime = Date.now(); baseRestTime = 0; baseDriveTime = 0;
+}
+
+function saveData() {
+    localStorage.setItem('th_daily_drive', baseDailyDrive); localStorage.setItem('th_weekly_drive', baseWeeklyDrive);
+    localStorage.setItem('th_biweekly_drive', baseBiWeeklyDrive); localStorage.setItem('th_work_time', baseWorkTime);
+    localStorage.setItem('th_course_dist', courseDistance); localStorage.setItem('th_shift_dist', shiftDistance);
+    localStorage.setItem('th_jokers', JSON.stringify(jokers)); 
+    localStorage.setItem('th_uicfg', JSON.stringify(uiConfig)); localStorage.setItem('th_uiorder', JSON.stringify(uiOrder));
+    localStorage.setItem('th_uicfg_rest', JSON.stringify(uiConfigRest)); localStorage.setItem('th_uiorder_rest', JSON.stringify(uiOrderRest));
+    localStorage.setItem('th_gps', gpsEnabled); localStorage.setItem('th_scale', globalScale);
+    localStorage.setItem('th_crew', isCrewMode); localStorage.setItem('th_driver', currentDriver);
+    localStorage.setItem('th_shift_active', isShiftActive); localStorage.setItem('th_shift_start', shiftStartedAt || '');
+    localStorage.setItem('th_last_weekly_rest', lastWeeklyRestEnd); localStorage.setItem('th_manual_today', hasManualEntryToday);
+    localStorage.setItem('th_w144_24', warn144_24h); localStorage.setItem('th_w144_12', warn144_12h); localStorage.setItem('th_w144_4', warn144_4h);
+    localStorage.setItem('th_history', JSON.stringify(shiftHistory)); 
+}
+
+window.onload = function() {
+    loadData(); applyConfigVisuals();
+    document.getElementById('gps-toggle').checked = gpsEnabled;
+    if(gpsEnabled) { startGPS(); setupDeviceFeatures(); } 
+    buildCalendar(); updateJokerUI(); updateVisuals(); updateSpecialModeUI(); updateShiftButtonUI(); updateDistUI();
+    setInterval(updateUI, 1000); 
+};
+
+
+// ==================== WEB BLUETOOTH API + ЗАКЛЮЧВАНЕ НА ЕКРАНА (HEARTBEAT) ====================
+function logBLE(msg) {
+    let el = document.getElementById('ble-log');
+    el.style.display = 'block';
+    el.innerHTML += `> ${msg}<br>`;
+    el.scrollTop = el.scrollHeight;
+}
+
+class TachoGen2Connector {
+    constructor() {
+        this.ITS_SERVICE_UUID = 'eef90782-0000-1000-8000-00805f9b34fb'; 
+        
+        // Характеристика за четене (RX). Провери дали това е точният UUID за твоя модел тахограф!
+        this.ITS_CHARACTERISTIC_RX_UUID = 'eef90784-0000-1000-8000-00805f9b34fb'; 
+        
+        this.device = null;
+        this.server = null;
+        this.keepAliveInterval = null; 
+    }
+
+    async connect() {
+        try {
+            logBLE("Търсене на Смарт Тахограф Gen2...");
+            this.device = await navigator.bluetooth.requestDevice({
+                filters: [
+                    { namePrefix: 'VDO' }, { namePrefix: 'Stoneridge' },
+                    { namePrefix: 'DTCO' }, { namePrefix: 'SE5000' }
+                ],
+                optionalServices: [this.ITS_SERVICE_UUID]
+            });
+            
+            logBLE("Открито устройство: " + this.device.name);
+            logBLE("Свързване към GATT сървъра...");
+            
+            this.device.addEventListener('gattserverdisconnected', (e) => this.onDisconnected(e));
+            this.server = await this.device.gatt.connect();
+            
+            logBLE("Успешна връзка! Стартиране на поддържащ пулс...");
+            
+            // ==========================================
+            // Абониране за данни (Notifications)
+            // ==========================================
+            logBLE("Абониране за данни от тахографа...");
+            const service = await this.server.getPrimaryService(this.ITS_SERVICE_UUID);
+            const rxCharacteristic = await service.getCharacteristic(this.ITS_CHARACTERISTIC_RX_UUID);
+            
+            // Стартираме потока от данни
+            await rxCharacteristic.startNotifications();
+            
+            // Насочваме всяко ново съобщение към твоята функция
+            rxCharacteristic.addEventListener('characteristicvaluechanged', handleFIFOIndication);
+            
+            logBLE("Успешно абониране! В готовност за данни...");
+            // ==========================================
+
+            let btn = document.getElementById('btn-ble-connect');
+            btn.classList.add('connected');
+            btn.innerText = "ТАХОГРАФ СВЪРЗАН ✓";
+            document.getElementById('timer-status').innerText = "TACHO SYNC ✓";
+            document.getElementById('timer-status').style.color = "#2196F3";
+            
+            this.startHeartbeat(); 
+            setupDeviceFeatures(); 
+            return true;
+        } catch (error) {
+            logBLE("Грешка при свързване: " + error);
+            this.resetUI();
+            return false;
+        }
+    }
+
+    startHeartbeat() {
+        if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+        // Праща сигнал на всеки 15 секунди, за да не бъде изхвърлен от тахографа
+        this.keepAliveInterval = setInterval(async () => {
+            if (this.server && this.server.connected) {
+                try {
+                    logBLE("Пулс: Поддържане на връзката активна...");
+                } catch(e) {}
+            }
+        }, 15000); 
+    }
+
+    onDisconnected(event) {
+        logBLE("Връзката с тахографа прекъсна!");
+        if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+        this.resetUI();
+    }
+
+    resetUI() {
+        let btn = document.getElementById('btn-ble-connect');
+        btn.classList.remove('connected');
+        btn.innerText = "📡 ВЪРЖИ ТАХОГРАФ";
+        document.getElementById('timer-status').innerText = "РЪЧЕН РЕЖИМ";
+        document.getElementById('timer-status').style.color = "#4CAF50";
+    }
+}
+
+let tachoInstance = null;
+async function connectTachoBLE() {
+    if (!navigator.bluetooth) { alert("Този браузър не поддържа Bluetooth!"); return; }
+    tachoInstance = new TachoGen2Connector();
+    await tachoInstance.connect();
+}
+
+
+// ==================== ДИНАМИЧНО ТАБЛО ЛОГИКА ====================
+function openMenu() { 
+    document.getElementById('slide-menu').classList.add('open'); 
+    document.getElementById('menu-overlay').style.display='block'; 
+    renderMenu();
+}
+function closeMenu() { document.getElementById('slide-menu').classList.remove('open'); document.getElementById('menu-overlay').style.display='none'; }
+
+function renderMenu() {
+    let c = document.getElementById('menu-items-container'); c.innerHTML = '';
+    let isMain = (currentView === 'main');
+    document.getElementById('menu-title-text').innerText = isMain ? "⚙️ Подредба (Каране)" : "⚙️ Подредба (Почивка)";
+    let orderArr = isMain ? uiOrder : uiOrderRest;
+    let cfgObj = isMain ? uiConfig : uiConfigRest;
+    let nameDict = isMain ? modNames : modNamesRest;
+
+    orderArr.forEach((id, idx) => {
+        let isChecked = cfgObj[id];
+        let checkHTML = `<label class="switch"><input type="checkbox" onchange="toggleMod('${id}', this.checked)" ${isChecked ? 'checked':''}><span class="slider"></span></label>`;
+        if(id === 'mod-tacho' || id === 'mod-start-btns' || id === 'mod-rest-tacho') checkHTML = '<span style="font-size:10px; color:#4CAF50;">ЗАДЪЛЖИТЕЛЕН</span>';
+        
+        c.innerHTML += `
+        <div class="menu-item">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <button class="sort-btn" onclick="moveMod(${idx}, -1)" ${idx===0?'disabled':''}>▲</button>
+                    <button class="sort-btn" onclick="moveMod(${idx}, 1)"  ${idx===orderArr.length-1?'disabled':''}>▼</button>
+                </div>
+                <span>${nameDict[id]}</span>
+            </div>
+            ${checkHTML}
+        </div>`;
+    });
+}
+
+function moveMod(idx, dir) {
+    let isMain = (currentView === 'main');
+    let orderArr = isMain ? uiOrder : uiOrderRest;
+    if(idx+dir < 0 || idx+dir >= orderArr.length) return;
+    let temp = orderArr[idx]; orderArr[idx] = orderArr[idx+dir]; orderArr[idx+dir] = temp;
+    saveData(); renderMenu(); applyConfigVisuals();
+}
+
+function toggleMod(id, state) { 
+    if(currentView === 'main') uiConfig[id] = state; else uiConfigRest[id] = state;
+    saveData(); applyConfigVisuals(); 
+}
+
+function changeScale(val) {
+    globalScale = val;
+    document.documentElement.style.setProperty('--ui-scale', globalScale);
+    document.getElementById('scale-val-display').innerText = Math.round(globalScale*100) + "%";
+    saveData();
+}
+
+function applyConfigVisuals() {
+    let containerMain = document.getElementById('dynamic-container');
+    uiOrder.forEach(id => {
+        let el = document.getElementById(id);
+        if(el) {
+            containerMain.appendChild(el); 
+            if(id !== 'mod-tacho' && id !== 'mod-start-btns') {
+                el.style.display = uiConfig[id] ? (id==='mod-jokers'||id==='mod-special'||id==='mod-weekly'||id==='mod-calendar'?'flex':(id==='mod-speed'||id==='mod-radio'?'block':'block')) : 'none';
+            }
+        }
+    });
+
+    let containerRest = document.getElementById('dynamic-container-rest');
+    uiOrderRest.forEach(id => {
+        let el = document.getElementById(id);
+        if(el) {
+            containerRest.appendChild(el);
+            if(id !== 'mod-rest-tacho') {
+                el.style.display = uiConfigRest[id] ? (id==='mod-rest-jokers'||id==='mod-rest-special'?'flex':'block') : 'none';
+            }
+        }
+    });
+}
+
+function toggleTimerMode(e) { e.stopPropagation(); isTimerElapsed = !isTimerElapsed; updateUI(); }
+
+// ==================== ГЛАВНА UI АКТУАЛИЗАЦИЯ (ФОНОВИ АЛАРМИ) ====================
+function liveSyncShiftData() {
+    if(!isShiftActive || !shiftStartedAt) return;
+    let startObj = new Date(shiftStartedAt); let dateStr = startObj.toDateString();
+    
+    if(!shiftHistory[dateStr]) shiftHistory[dateStr] = {};
+    shiftHistory[dateStr].start = startObj.getHours().toString().padStart(2,'0')+":"+startObj.getMinutes().toString().padStart(2,'0');
+    shiftHistory[dateStr].locStart = startLocation;
+    shiftHistory[dateStr].drive = baseDailyDrive;
+    shiftHistory[dateStr].work = baseWorkTime;
+    shiftHistory[dateStr].dist = shiftDistance;
+    shiftHistory[dateStr].manual = hasManualEntryToday;
+}
+
+function updateUI() {
+    let now = Date.now(); let sessionSecs = Math.floor((now - modeStartTime) / 1000);
+    let cDailyDrive = baseDailyDrive; let cWeeklyDrive = baseWeeklyDrive; let cBiWeeklyDrive = baseBiWeeklyDrive; let cRestTime = baseRestTime; let cDriveTime = baseDriveTime; let cWorkTime = baseWorkTime;
+
+    if(!isOutMode) {
+        if(currentState === 'drive') { cDailyDrive += sessionSecs; cWeeklyDrive += sessionSecs; cBiWeeklyDrive += sessionSecs; cDriveTime += sessionSecs; cWorkTime += sessionSecs; }
+        else if(currentState === 'work') { cWorkTime += sessionSecs; }
+        else if(currentState === 'rest') { cRestTime += sessionSecs; }
+    } else { if(currentState === 'rest') { cRestTime += sessionSecs; } else if (currentState === 'work') { cWorkTime += sessionSecs; } }
+
+    let driveLeft = Math.max(0, MAX_DRIVE - cDriveTime);
+    if (cDriveTime >= 15300 && !warning4h15mShown) { showWarningModal("Остават 15 минути до задължителна пауза от 45 мин!"); warning4h15mShown = true; }
+
+    let timeSinceLastRest = Math.floor((now - lastWeeklyRestEnd) / 1000); let timeTo144 = Math.max(0, (144 * 3600) - timeSinceLastRest);
+    if (timeTo144 <= 24*3600 && timeTo144 > 0 && !warn144_24h) { showWarningModal("Остават 24 ЧАСА до задължителна СЕДМИЧНА ПАУЗА!"); warn144_24h = true; saveData(); }
+    if (timeTo144 <= 12*3600 && timeTo144 > 0 && !warn144_12h) { showWarningModal("Остават 12 ЧАСА до задължителна СЕДМИЧНА ПАУЗА!"); warn144_12h = true; saveData(); }
+    if (timeTo144 <= 4*3600  && timeTo144 > 0 && !warn144_4h)  { showWarningModal("КРИТИЧНО: Само 4 ЧАСА до задължителна СЕДМИЧНА ПАУЗА!"); warn144_4h = true; saveData(); }
+
+    if(isTimerElapsed) { document.getElementById('tacho-label').innerText = "Изтекло Каране"; document.getElementById('tacho-label').style.color = "#FF9800"; document.getElementById('main-timer-text').innerText = fmtSecs(cDriveTime); } 
+    else { document.getElementById('tacho-label').innerText = "Оставащо Каране"; document.getElementById('tacho-label').style.color = "#888"; document.getElementById('main-timer-text').innerText = fmtSecs(driveLeft); }
+
+    let pct = driveLeft / MAX_DRIVE; let ring = document.getElementById('tacho-ring-main');
+    ring.style.strokeDashoffset = 600 - (pct * 600); ring.style.stroke = pct > 0.15 ? "#4CAF50" : (pct > 0.05 ? "#FF9800" : "#F44336");
+    if(currentState==='drive') ring.style.filter = "drop-shadow(0 0 8px " + ring.style.stroke + ")"; else ring.style.filter = "none";
+    document.getElementById('main-view').classList.toggle('alarm-active', currentState === 'drive' && driveLeft < 2700 && driveLeft > 0);
+    
+    let dailyLimit = (jokers['10h'] > 0 || (jokers['10h'] === 0 && cDailyDrive > DAILY_STD)) ? DAILY_TEN : DAILY_STD;
+    document.getElementById('daily-limit-display').innerText = fmtSecs(dailyLimit);
+    document.getElementById('daily-driven-text').innerText = fmtSecs(cDailyDrive);
+    document.getElementById('daily-progress').style.width = Math.min((cDailyDrive / dailyLimit) * 100, 100) + "%";
+    
+    document.getElementById('weekly-text').innerText = Math.floor(cWeeklyDrive / 3600) + ":" + Math.floor((cWeeklyDrive % 3600) / 60).toString().padStart(2, '0');
+    document.getElementById('weekly-progress').style.width = Math.min((cWeeklyDrive / WEEKLY_MAX) * 100, 100) + "%";
+    document.getElementById('biweekly-text').innerText = Math.floor(cBiWeeklyDrive / 3600) + ":" + Math.floor((cBiWeeklyDrive % 3600) / 60).toString().padStart(2, '0');
+    document.getElementById('biweekly-progress').style.width = Math.min((cBiWeeklyDrive / BIWEEKLY_MAX) * 100, 100) + "%";
+
+    updateShiftUI(now, dailyLimit);
+
+    if(currentView === 'rest') {
+        document.getElementById('rest-timer-text').innerText = fmtSecs(cRestTime);
+        updateRestFillableLabels(cRestTime);
+        document.getElementById('hint-split').style.display = (cRestTime > 900 && cRestTime < 1800) ? 'block' : 'none';
+        document.getElementById('time-to-144h').innerText = Math.floor(timeTo144 / 3600) + "ч " + Math.floor((timeTo144 % 3600) / 60) + "м";
+        document.getElementById('time-to-144h').style.color = timeTo144 < (12 * 3600) ? "#F44336" : "#fff";
+    }
+
+    if(isShiftActive && now % 5000 < 1000) {
+        liveSyncShiftData();
+        buildCalendar(); 
+    }
+
+    if (currentView === 'report' && currentReportDate === new Date().toDateString() && isShiftActive) {
+        document.getElementById('rep-status').innerText = "Отворена смяна (Реално време)"; document.getElementById('rep-status').style.color = "#FFEB3B";
+        document.getElementById('rep-drive').innerText = fmtSecsShort(cDailyDrive) + " ч."; document.getElementById('rep-work').innerText = fmtSecsShort(cWorkTime) + " ч.";
+        document.getElementById('rep-dist').innerText = shiftDistance.toFixed(1) + " км";
+        let sDiff = Math.floor((now - new Date(shiftStartedAt)) / 1000); document.getElementById('rep-length').innerText = fmtSecsShort(sDiff) + " ч.";
+        document.getElementById('rep-manual-flag').style.display = hasManualEntryToday ? 'block' : 'none';
+    }
+
+    if (isOsActive) { osCounter--; if (osCounter <= 0) document.getElementById('os-timer').innerText = "0"; else document.getElementById('os-timer').innerText = osCounter; }
+}
+
+// ==================== СТАТЕ И GPS ====================
+function setManualState(newState) {
+    if(currentState === newState) return;
+    if(isOutMode && newState === 'drive') return; 
+    let now = Date.now(); let sessionSecs = Math.floor((now - modeStartTime) / 1000);
+    if(!isOutMode) {
+        if(currentState === 'drive') { baseDailyDrive += sessionSecs; baseWeeklyDrive += sessionSecs; baseBiWeeklyDrive += sessionSecs; baseDriveTime += sessionSecs; baseWorkTime += sessionSecs; }
+        else if(currentState === 'work') { baseWorkTime += sessionSecs; }
+        else if(currentState === 'rest') { baseRestTime += sessionSecs; if(baseRestTime >= 2700 && !isFerryMode) { baseDriveTime = 0; warning4h15mShown = false; } if(baseRestTime >= 24 * 3600) { lastWeeklyRestEnd = now; warn144_24h=false; warn144_12h=false; warn144_4h=false; } }
+    } else { if(currentState === 'rest') baseRestTime += sessionSecs; else if (currentState === 'work') baseWorkTime += sessionSecs; }
+    
+    if(currentState === 'rest' && baseRestTime >= 9 * 3600 && (newState === 'drive' || newState === 'work')) handleShiftStop(true);
+    currentState = newState; modeStartTime = now; if(newState === 'rest') baseRestTime = 0;
+    saveData(); updateVisuals(); updateUI(); if(newState === 'drive') navTo('main'); 
+}
+
+function handleMainCircleClick() { if(currentState === 'rest') setManualState('drive'); else setManualState('rest'); }
+
+function showWarningModal(msg) { document.getElementById('warning-msg-text').innerText = msg; document.getElementById('warning-modal').style.display = 'flex'; }
+function closeWarningModal() { document.getElementById('warning-modal').style.display = 'none'; }
+function closeBorderModal() { document.getElementById('border-modal').style.display = 'none'; saveData(); }
+
+async function setupDeviceFeatures() {
+    try { 
+        if ('wakeLock' in navigator && !wakeLock) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; });
+            logBLE("Защита: Екранът е заключен буден.");
+        }
+    } catch(err) {}
+    try { if("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") Notification.requestPermission(); } catch(err) {}
+}
+
+async function fetchLocationData(lat, lon) {
+    try {
+        let res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+        let data = await res.json();
+        let city = data.address.city || data.address.town || data.address.village || ""; let country = data.address.country || "";
+        let code = data.address.country_code ? data.address.country_code.toUpperCase() : "";
+        return { name: city ? `${city}, ${country}` : country, code: code, countryName: country };
+    } catch(e) { return { name: "Неизвестна локация", code: "", countryName: "" }; }
+}
+
+function startGPS() {
+    if("geolocation" in navigator) {
+        watchId = navigator.geolocation.watchPosition(
+            async pos => {
+                let rawSpd = (pos.coords.speed || 0) * 3.6; let spd = rawSpd;
+                if (rawSpd > 45 && rawSpd <= 70) spd -= 1; else if (rawSpd > 70 && rawSpd <= 85) spd -= 2; else if (rawSpd > 85) spd -= 3;
+                spd = Math.round(spd * calibFactor); if (spd < 0) spd = 0;
+                document.getElementById('current-speed-text').innerHTML = spd;
+                
+                if (spd >= 5 && currentState !== 'drive' && !isOutMode) { if (!isShiftActive) handleShiftStart(true); setManualState('drive'); } 
+                else if (spd < 3 && isShiftActive && !isOutMode) { if (currentState === 'drive') setManualState('work'); }
+                
+                if(spd >= 91) {
+                    let now = Date.now();
+                    if (!muteForToday && !muteUntilStop && now > overspeedMutedUntil) {
+                        document.getElementById('os-speed-display').innerText = spd + " км/ч";
+                        if(!isOsActive) { isOsActive=true; osCounter=30; document.getElementById('overspeed-modal').style.display='flex'; }
+                    }
+                } else { if(isOsActive) { isOsActive=false; document.getElementById('overspeed-modal').style.display='none'; osCounter=30; } if(spd === 0) muteUntilStop = false; }
+
+                if (spd < 5 && Math.random() < 0.1) {
+                    let loc = await fetchLocationData(pos.coords.latitude, pos.coords.longitude);
+                    if (loc.code && currentCountryCode && loc.code !== currentCountryCode) {
+                        document.getElementById('border-country-name').innerText = loc.countryName; document.getElementById('border-modal').style.display = 'flex';
+                    }
+                    if(loc.code) currentCountryCode = loc.code;
+                }
+                if(lastLat && lastLon) { let d = getGPSDistance(lastLat, lastLon, pos.coords.latitude, pos.coords.longitude); if(d > 0.005) { courseDistance += d; if(isShiftActive) shiftDistance += d; updateDistUI(); } }
+                lastLat = pos.coords.latitude; lastLon = pos.coords.longitude;
+            }, err => { stopGPS(); document.getElementById('gps-toggle').checked=false; }, { enableHighAccuracy: true }
+        );
+    }
+}
+function stopGPS() { if(watchId) navigator.geolocation.clearWatch(watchId); watchId=null; lastLat=null; lastLon=null; document.getElementById('current-speed-text').innerHTML = '0'; }
+function toggleGPS(cb) { gpsEnabled = cb.checked; if(gpsEnabled){ setupDeviceFeatures(); startGPS(); } else stopGPS(); saveData(); }
+function muteOverspeed(type) { if (type === 5) overspeedMutedUntil = Date.now() + 5 * 60 * 1000; if (type === 'stop') muteUntilStop = true; if (type === 'today') muteForToday = true; isOsActive = false; document.getElementById('overspeed-modal').style.display = 'none'; osCounter = 30; }
+
+// ==================== ДОПЪЛНИТЕЛНИ МОДАЛИ ====================
+function openCalib() { document.getElementById('calib-modal').style.display = 'flex'; }
+function closeCalib() { document.getElementById('calib-modal').style.display = 'none'; }
+function applyCalibration() { let truck = parseFloat(document.getElementById('input-truck-km').value); let gps = parseFloat(document.getElementById('input-gps-km').value); if (truck && gps) { calibFactor = truck / gps; saveData(); alert("Успешно калибрирано!"); closeCalib(); } }
+function updateDistUI() { document.getElementById('course-dist-text').innerText = courseDistance.toFixed(1); document.getElementById('shift-dist-text').innerText = shiftDistance.toFixed(1) + " км"; }
+
+function openManualModal() { document.getElementById('manual-modal').style.display = 'flex'; }
+function closeManualModal() { document.getElementById('manual-modal').style.display = 'none'; }
+function applyManualEntry() {
+    let addDrive = parseFloat(document.getElementById('input-man-drive').value) || 0; let addWork = parseFloat(document.getElementById('input-man-work').value) || 0;
+    if (addDrive > 0 || addWork > 0) {
+        let driveSecs = addDrive * 60; let workSecs = addWork * 60;
+        baseDailyDrive += driveSecs; baseWeeklyDrive += driveSecs; baseBiWeeklyDrive += driveSecs; baseDriveTime += driveSecs; baseWorkTime += workSecs + driveSecs;
+        hasManualEntryToday = true; saveData(); updateUI(); alert("Времето е добавено ръчно."); closeManualModal();
+    }
+}
+
+// ==================== СМЯНА И ДВОЙКА ====================
+function handleNewCourse() { if(confirm("СТАРТ НОВ КУРС? Занулява общия пробег!")) { courseDistance = 0; shiftDistance = 0; location.reload(); } }
+function handleShiftToggle() { setupDeviceFeatures(); if(!isShiftActive) handleShiftStart(); else handleShiftStop(false); }
+function handleShiftStart(isAuto = false) {
+    if(isAuto || confirm("СТАРТ НА ДНЕВНА СМЯНА?")) {
+        isShiftActive = true; shiftStartedAt = new Date().toISOString(); shiftDistance = 0; muteForToday = false; hasManualEntryToday = false;
+        isNightShift = (new Date().getHours() >= 0 && new Date().getHours() < 4);
+        if(gpsEnabled && lastLat && lastLon) { fetchLocationData(lastLat, lastLon).then(loc => { startLocation = loc.name; currentCountryCode = loc.code; liveSyncShiftData(); saveData(); }); } else { startLocation = "Ръчен старт"; }
+        liveSyncShiftData(); saveData(); updateShiftButtonUI(); baseDailyDrive = 0; baseWorkTime = 0; updateDistUI(); setManualState('work'); 
+    }
+}
+function handleShiftStop(isAuto) {
+    if(isAuto || confirm("КРАЙ НА ДНЕВНА СМЯНА?")) {
+        isShiftActive = false; archiveCurrentShift(); shiftStartedAt = null; isNightShift = false; baseDailyDrive = 0; shiftDistance = 0; baseWorkTime = 0; saveData(); updateShiftButtonUI(); setManualState('rest'); buildCalendar();
+    }
+}
+function toggleCrewMode() { if(!confirm("Промяна ДВОЙКА/ЕДИНИЧНА?")) return; isCrewMode = !isCrewMode; currentDriver = 1; localStorage.setItem('th_crew', isCrewMode); localStorage.setItem('th_driver', currentDriver); updateSpecialModeUI(); updateUI(); }
+function swapCrewDriver() {
+    if(!isCrewMode) return;
+    if(confirm(`Потвърди ПРЕДАВАНЕ НА ВОЛАНА.\nТекущ: Водач ${currentDriver}. Данните му за дневно каране се зануляват за новия водач!`)) {
+        setManualState('work'); currentDriver = currentDriver === 1 ? 2 : 1; baseDailyDrive = 0; baseDriveTime = 0; warning4h15mShown = false; saveData(); updateSpecialModeUI(); alert(`Воланът е предаден успешно на ВОДАЧ ${currentDriver}!`);
+    }
+}
+function toggleOutMode() { isOutMode = !isOutMode; if(isOutMode) setManualState('work'); else setManualState('rest'); updateSpecialModeUI(); }
+function toggleFerryMode() { isFerryMode = !isFerryMode; document.getElementById('btn-mode-ferry').classList.toggle('active', isFerryMode); }
+
+function archiveCurrentShift() {
+    if(!shiftStartedAt) return;
+    let nowObj = new Date(); let startObj = new Date(shiftStartedAt); let dateStr = startObj.toDateString();
+    let sessionSecs = Math.floor((nowObj - modeStartTime) / 1000);
+    if(currentState === 'work') baseWorkTime += sessionSecs;
+    if(currentState === 'drive') { baseDailyDrive += sessionSecs; baseWeeklyDrive += sessionSecs; baseBiWeeklyDrive += sessionSecs; baseWorkTime += sessionSecs;}
+    let shiftSecs = Math.floor((nowObj - startObj) / 1000);
+    
+    let violations = [];
+    if(baseDailyDrive > 10 * 3600) violations.push({txt: "Превишено дневно каране (>10ч)", fine: "Глоба: ~150€ до 500€"});
+    let shiftLimit = isCrewMode ? 30 : (isNightShift ? 10 : (jokers['15h'] > 0 ? 15 : 13));
+    if(shiftSecs > shiftLimit * 3600) violations.push({txt: `Превишена работна смяна (>${shiftLimit}ч)`, fine: "Глоба: ~100€ до 250€"});
+    if(baseWeeklyDrive > 56 * 3600) violations.push({txt: "Превишени 56 часа за седмица", fine: "Глоба: ~250€ до 1000€"});
+    if(baseBiWeeklyDrive > 90 * 3600) violations.push({txt: "Превишени 90 часа за 2 седмици", fine: "Глоба: ~250€ до 1000€"});
+    
+    if(baseDailyDrive > DAILY_STD) { jokers['10h']--; if(jokers['10h']<0) jokers['10h']=0; }
+    if(shiftSecs > 13*3600 && !isCrewMode && !isNightShift) { jokers['15h']--; if(jokers['15h']<0) jokers['15h']=0; }
+    
+    shiftHistory[dateStr] = {
+        start: startObj.getHours().toString().padStart(2,'0')+":"+startObj.getMinutes().toString().padStart(2,'0'),
+        end: nowObj.getHours().toString().padStart(2,'0')+":"+nowObj.getMinutes().toString().padStart(2,'0'),
+        locStart: startLocation, locEnd: endLocation, length: shiftSecs, drive: baseDailyDrive, work: baseWorkTime, dist: shiftDistance, violations: violations, notes: shiftHistory[dateStr]?.notes || "",
+        jkr10: jokers['10h'], jkr15: jokers['15h'], jkr9: jokers['9h'], compliant: violations.length === 0, manual: hasManualEntryToday
+    };
+}
+
+// ==================== UI ФУНКЦИИ ====================
+function updateSpecialModeUI() { document.getElementById('btn-mode-crew').classList.toggle('active', isCrewMode); document.getElementById('btn-mode-out').classList.toggle('active', isOutMode); document.getElementById('crew-badge').style.display = isCrewMode ? 'inline-block' : 'none'; document.getElementById('crew-badge').innerText = "ВОДАЧ " + currentDriver; document.getElementById('btn-swap-driver').style.display = isCrewMode ? 'block' : 'none'; }
+function navTo(view) { currentView = view; document.getElementById('main-view').style.display=view==='main'?'flex':'none'; document.getElementById('rest-view').style.display=view==='rest'?'flex':'none'; document.getElementById('report-view').style.display=view==='report'?'flex':'none'; if(view==='main'||view==='rest') { document.getElementById('btn-nav-main').classList.toggle('active-mode', view==='main'); document.getElementById('btn-nav-rest').classList.toggle('active-mode', view==='rest'); updateVisuals(); } if(view==='report') updateUI(); }
+function updateShiftButtonUI() { let btn = document.getElementById('btn-shift-startstop'); if(isShiftActive) { btn.innerText = "🏁 CTOП СМЯНА"; btn.classList.add('active'); } else { btn.innerText = "🏁 СТАРТ СМЯНА"; btn.classList.remove('active'); } }
+function changeShiftLimit(h) { shiftLengthLimit=h; document.getElementById('btn-shift-13h').classList.toggle('active', h===13); document.getElementById('btn-shift-15h').classList.toggle('active', h===15); updateUI(); }
+function changeRestSelection(h) { currentRestSel=h; document.getElementById('btn-rest-9h').classList.toggle('active-green', h===9); document.getElementById('btn-rest-11h').classList.toggle('active-green', h===11); updateUI(); }
+function changeRestWeekly(h) { currentWeeklySel=h; document.getElementById('btn-rest-24h').classList.toggle('active-orange', h===24); document.getElementById('btn-rest-45h').classList.toggle('active-orange', h===45); updateUI(); }
+function updateJokerUI() { document.getElementById('joker-10-text').innerText=jokers['10h']+" бр."; document.getElementById('joker-15-text').innerText=jokers['15h']+" бр."; document.getElementById('joker-9-text').innerText=jokers['9h']+" бр."; document.getElementById('joker-9-text-rest').innerText=jokers['9h']+" бр."; }
+
+function updateVisuals() {
+    let mainStat = document.getElementById('timer-status'); let ring = document.getElementById('tacho-ring-main'); let topBadge = document.getElementById('top-status-badge');
+    document.getElementById('btn-state-work').classList.remove('active-mode');
+    if(currentState==='drive'){ mainStat.innerText="КАРАНЕ »»»"; mainStat.style.color="#4CAF50"; ring.style.stroke="#4CAF50"; document.getElementById('top-status-text').innerText="КАРАНЕ"; topBadge.style.color="#4CAF50"; document.getElementById('top-status-dot').style.background="#4CAF50";}
+    else if(currentState==='rest'){ mainStat.innerText="В ПАУЗА"; mainStat.style.color="#aaa"; ring.style.stroke="#aaa"; document.getElementById('top-status-text').innerText="ПАУЗА"; topBadge.style.color="#F44336"; document.getElementById('top-status-dot').style.background="#F44336";}
+    else if(currentState==='work'){ mainStat.innerText="РАБОТА🔨"; mainStat.style.color="#2196F3"; ring.style.stroke="#2196F3"; document.getElementById('top-status-text').innerText="ЧУКЧЕТА"; topBadge.style.color="#2196F3"; document.getElementById('top-status-dot').style.background="#2196F3"; document.getElementById('btn-state-work').classList.add('active-mode');}
+}
+
+function updateShiftUI(nowMs, dailyLimSecs) {
+    if(!isShiftActive || !shiftStartedAt) { document.getElementById('shift-start-text').innerText="--:--"; document.getElementById('shift-elapsed-text').innerText="--:--"; document.getElementById('shift-end-text').innerText="--:--"; document.getElementById('night-badge').style.display = 'none'; return; }
+    let startD = new Date(shiftStartedAt); let sDiff = Math.floor((nowMs - startD)/1000); let sLimit = isCrewMode ? 30 : (isNightShift ? 10 : shiftLengthLimit); let sEndObj = new Date(startD.getTime() + sLimit*3600*1000); let sLeft = Math.max(0, sLimit*3600 - sDiff);
+    document.getElementById('shift-start-text').innerText=fmtHour(startD); document.getElementById('shift-elapsed-text').innerText=Math.floor(sDiff/3600)+":"+Math.floor((sDiff%3600)/60).toString().padStart(2,'0'); document.getElementById('shift-elapsed-text').style.color= sLeft < 2700 ? "#F44336" : "#2196F3"; document.getElementById('shift-end-text').innerText=fmtHour(sEndObj);
+    document.getElementById('night-badge').style.display = isNightShift ? 'inline-block' : 'none';
+}
+
+function updateRestFillableLabels(rSecs) {
+    let modeST = modeStartTime; 
+    function setB(id, tgt, color) { let el = document.getElementById(id); if(!el) return; let p = Math.min((rSecs/tgt)*100, 100); el.style.background = `linear-gradient(to right, ${color} ${p}%, #111 ${p}%)`; }
+    let greenF = '#1b5e20', blueF = '#0d47a1', orangeF = '#e65100';
+    setB('label-45m', 45*60, greenF); setB('label-15m', 15*60, greenF); setB('label-30m', 30*60, blueF); setB('label-3h', 3*3600, greenF); setB('label-9h-split', 9*3600, blueF); setB('label-daily', currentRestSel*3600, greenF); setB('label-weekly', currentWeeklySel*3600, orangeF);
+    function fT(m){ let d=new Date(modeST+m*60000); return fmtHour(d); } function fD(h){ let d=new Date(modeST+h*3600000); const n=['НД','ПН','ВТ','СР','ЧТ','ПТ','СБ']; return n[d.getDay()]+" "+fmtHour(d); }
+    document.getElementById('label-45m').innerHTML=`<span>Край: ${fT(45)}</span>`; document.getElementById('label-15m').innerHTML=`<span>Край: ${fT(15)}</span>`; document.getElementById('label-30m').innerHTML=`<span>Край: ${fT(30)}</span>`; document.getElementById('label-3h').innerHTML=`<span>Край: ${fT(180)}</span>`; document.getElementById('label-9h-split').innerHTML=`<span>Край: ${fT(540)}</span>`; document.getElementById('label-daily').innerHTML=`<span>Край: ${fT(currentRestSel*60)}</span>`; document.getElementById('label-weekly').innerHTML=`<span>Край: ${fD(currentWeeklySel)}</span>`;
+}
+
+// ОТЧЕТИ
+function getJokerColor(count, max) { if(count >= max - 1 && count > 0) return '#4CAF50'; if(count === 1) return '#FF9800'; return '#F44336'; }
+function handleSaveNote() { if(!currentReportDate || !shiftHistory[currentReportDate]) return; shiftHistory[currentReportDate].notes = document.getElementById('rep-notes').value; saveData(); alert("Бележката е запазена!"); }
+function showReport(dateStr) {
+    currentReportDate = dateStr; let data = shiftHistory[dateStr]; let d = new Date(dateStr); const mN=['Януари','Февруари','Март','Април','Май','Юни','Юли','Август','Септември','Октомври','Ноември','Декември'];
+    document.getElementById('rep-date').innerText = `${d.getDate()} ${mN[d.getMonth()]}`;
+    let isToday = (dateStr === new Date().toDateString());
+    if (isToday) {
+        document.getElementById('rep-jk-10').innerText = jokers['10h'] + " ост."; document.getElementById('rep-jk-10').style.color = getJokerColor(jokers['10h'], 2);
+        document.getElementById('rep-jk-15').innerText = jokers['15h'] + " ост."; document.getElementById('rep-jk-15').style.color = getJokerColor(jokers['15h'], 2);
+        document.getElementById('rep-jk-9').innerText = jokers['9h'] + " ост."; document.getElementById('rep-jk-9').style.color = getJokerColor(jokers['9h'], 3);
+    }
+    if(isToday && isShiftActive) {
+        document.getElementById('rep-start').innerText = fmtHour(new Date(shiftStartedAt)); document.getElementById('rep-end').innerText = "--:--"; document.getElementById('rep-loc-start').innerText = startLocation || "--"; document.getElementById('rep-loc-end').innerText = "В движение...";
+        document.getElementById('rep-compliance').innerHTML='<span style="color:#FFEB3B;">Смяната е в ход, следи се на живо.</span>'; document.getElementById('rep-notes').value = shiftHistory[dateStr] ? shiftHistory[dateStr].notes : ""; document.getElementById('rep-manual-flag').style.display = hasManualEntryToday ? 'block' : 'none';
+    } else if (data && data.end) {
+        document.getElementById('rep-status').innerText = "Курс завършен"; document.getElementById('rep-status').style.color = "#4CAF50"; document.getElementById('rep-start').innerText = data.start; document.getElementById('rep-end').innerText = data.end; document.getElementById('rep-loc-start').innerText = data.locStart || "--"; document.getElementById('rep-loc-end').innerText = data.locEnd || "--"; document.getElementById('rep-drive').innerText = fmtSecsShort(data.drive) + " ч."; document.getElementById('rep-dist').innerText = data.dist.toFixed(1) + " км"; document.getElementById('rep-length').innerText = fmtSecsShort(data.length) + " ч."; document.getElementById('rep-work').innerText = fmtSecsShort(data.work || data.drive) + " ч.";
+        if(!isToday) { document.getElementById('rep-jk-10').innerText = (data.jkr10 !== undefined ? data.jkr10 : 0) + " ост."; document.getElementById('rep-jk-15').innerText = (data.jkr15 !== undefined ? data.jkr15 : 0) + " ост."; document.getElementById('rep-jk-9').innerText = (data.jkr9 !== undefined ? data.jkr9 : 0) + " ост."; }
+        let compEl = document.getElementById('rep-compliance');
+        if(data.compliant) compEl.innerHTML = '<div class="compliant-box">✅ ВСИЧКО Е СПАЗЕНО</div>'; else { let html='<div class="violation-list">'; (data.violations||[]).forEach(v=>html+=`<div class="violation-item">❌ ${v.txt}</div><span class="fine-text">${v.fine}</span>`); html+='</div>'; compEl.innerHTML=html; }
+        document.getElementById('rep-notes').value = data.notes || ""; document.getElementById('rep-manual-flag').style.display = data.manual ? 'block' : 'none';
+    } else {
+        document.getElementById('rep-status').innerText = "Няма данни"; document.getElementById('rep-status').style.color="#888"; document.getElementById('rep-start').innerText="--:--"; document.getElementById('rep-end').innerText="--:--"; document.getElementById('rep-loc-start').innerText="--"; document.getElementById('rep-loc-end').innerText="--"; document.getElementById('rep-drive').innerText="--:-- ч."; document.getElementById('rep-dist').innerText="0 км"; document.getElementById('rep-length').innerText="--:-- ч."; document.getElementById('rep-work').innerText="--:-- ч."; document.getElementById('rep-compliance').innerHTML='<span style="color:#aaa;">--</span>'; document.getElementById('rep-notes').value=""; document.getElementById('rep-manual-flag').style.display = 'none';
+    }
+    navTo('report');
+}
+
+function shareReport() {
+    if(!currentReportDate) return; let data = shiftHistory[currentReportDate]; let isTodayLive = (currentReportDate === new Date().toDateString() && isShiftActive);
+    let txt = `📋 ОТЧЕТ ЗА СМЯНА: ${document.getElementById('rep-date').innerText}\n`;
+    if(isTodayLive) { let drv = Math.floor(baseDailyDrive/3600)+":"+Math.floor((baseDailyDrive%3600)/60).toString().padStart(2,'0'); let wrk = Math.floor(baseWorkTime/3600)+":"+Math.floor((baseWorkTime%3600)/60).toString().padStart(2,'0'); txt += `🛑 СТАТУС: В ход (Реално време)\n🚚 Каране: ${drv} ч.\n🔨 Работа: ${wrk} ч.\n🛣 Пробег днес: ${shiftDistance.toFixed(1)} км.\n`; if(hasManualEntryToday) txt += `⚠️ Има ВЪВЕДЕНО РЪЧНО време!\n`; } 
+    else if (data) { txt += `📍 От: ${data.locStart}\n📍 До: ${data.locEnd}\n⏱ Старт: ${data.start} | Край: ${data.end}\n🚚 Каране: ${fmtSecsShort(data.drive)} ч.\n🔨 РАБОТНО ВРЕМЕ: ${fmtSecsShort(data.work)} ч.\n🛣 Пробег: ${data.dist.toFixed(1)} км.\n`; if(data.manual) txt += `⚠️ Част от времето е ВЪВЕДЕНО РЪЧНО!\n`; txt += `📝 Бележки: ${data.notes || "Няма"}`; }
+    if(navigator.share) navigator.share({title: 'Дневен Отчет', text: txt}); else { navigator.clipboard.writeText(txt); alert("Отчетът е копиран!"); }
+}
+
+function buildCalendar() {
+    let now = new Date(); let todayS = now.toDateString(); let mon = new Date(); let cDay = now.getDay(); if(cDay===0) cDay=7; mon.setDate(now.getDate()-cDay+1); const dN=['ПН','ВТ','СР','ЧТ','ПТ','СБ','НД'];
+    let html = '';
+    for(let i=0; i<7; i++) { 
+        let d=new Date(mon); d.setDate(mon.getDate()+i); let dS = d.toDateString(); 
+        let hasDataClass = (shiftHistory[dS] && (shiftHistory[dS].end || shiftHistory[dS].start)) ? 'has-data' : '';
+        html += `<div class="day-chip ${dS===todayS?'active':''} ${hasDataClass}" onclick="if('${dS}'==='${todayS}') navTo('main'); else showReport('${dS}');">${dN[i]}<br><small>${d.getDate().toString().padStart(2,'0')}</small></div>`; 
+    }
+    document.getElementById('mod-calendar').innerHTML = html; document.getElementById('calendar-row-report').innerHTML = html;
+}
+
+function getGPSDistance(la1, lo1, la2, lo2) { var R=6371; var dLa=(la2-la1)*Math.PI/180; var dLo=(lo2-lo1)*Math.PI/180; var a=Math.sin(dLa/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLo/2)**2; return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
+function fmtSecs(s) { let h=Math.floor(s/3600); let m=Math.floor((s%3600)/60); return h.toString().padStart(2,'0')+":"+m.toString().padStart(2,'0'); }
+function fmtSecsShort(s) { let h=Math.floor(s/3600); let m=Math.floor((s%3600)/60); return `${h}:${m.toString().padStart(2,'0')}`; }
+function fmtHour(d) { return d.getHours().toString().padStart(2,'0')+":"+d.getMinutes().toString().padStart(2,'0'); }
+function getWeekNumber(d) { d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7)); var yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1)); var weekNo = Math.ceil(( ( (d - yearStart) / 86400000) + 1)/7); return weekNo; }
+
+// АКТИВИРАНЕ НА ОФЛАЙН РЕЖИМА (PWA)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => console.log('Офлайн режимът е активен!', reg))
+      .catch(err => console.error('Грешка при офлайн режима:', err));
+  });
+}
+
+// ==================== РАДИО СТАНЦИЯ (ДИНАМИЧНА) ====================
+let wsRadio = null;
+let activeRadioStream = null;
+
+async function toggleRadioConnection() {
+    const btnConn = document.getElementById('btn-radio-connect');
+    const btnPtt = document.getElementById('btn-ptt');
+    const channelInput = document.getElementById('radio-channel-input');
+    
+    // Ако вече сме свързани -> ИЗКЛЮЧВАНЕ
+    if (wsRadio && wsRadio.readyState === WebSocket.OPEN) {
+        wsRadio.close();
+        if(activeRadioStream) { activeRadioStream.getTracks().forEach(t => t.stop()); activeRadioStream = null; }
+        btnConn.innerText = "СВЪРЖИ";
+        btnConn.style.background = "#00BCD4";
+        btnConn.style.color = "#000";
+        channelInput.disabled = false;
+        
+        btnPtt.style.opacity = "0.5";
+        btnPtt.disabled = true;
+        btnPtt.innerHTML = "🎤 ИЗЧАКВАНЕ...";
+        wsRadio = null;
+        return;
+    }
+    
+    // Ако не сме свързани -> ВКЛЮЧВАНЕ
+    let channel = channelInput.value.trim() || "25";
+    
+    // ТУК Е ТВОЯТ СЪРВЪР ОТ RENDER:
+    let serverBase = "wss://tachoradioserver.onrender.com"; 
+    
+    try {
+        activeRadioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch(err) {
+        alert("Няма достъп до микрофона! Разреши го от настройките на браузъра (катинарчето горе вляво).");
+        return;
+    }
+    
+    btnConn.innerText = "СВЪРЗВАНЕ...";
+    
+    let wsUrl = `${serverBase}/ws/radio/${encodeURIComponent(channel)}`;
+    wsRadio = new WebSocket(wsUrl);
+    wsRadio.binaryType = 'arraybuffer';
+    
+    wsRadio.onopen = () => {
+        btnConn.innerText = "ОТКАЧИ";
+        btnConn.style.background = "#F44336";
+        btnConn.style.color = "#fff";
+        channelInput.disabled = true; // Заключваме полето докато сме вътре
+        
+        btnPtt.style.opacity = "1";
+        btnPtt.disabled = false;
+        btnPtt.innerHTML = "🎤 ЗАДРЪЖ И ГОВОРИ";
+        setupMainPttControls(); // Активираме копчето
+    }
+    
+    wsRadio.onmessage = async (event) => {
+        try {
+            let audioBlob = new Blob([event.data], { type: 'audio/webm' });
+            let audioUrl = URL.createObjectURL(audioBlob);
+            let audio = new Audio(audioUrl);
+            audio.play();
+        } catch(e) {}
+    };
+    
+    wsRadio.onclose = () => {
+        if(btnConn.innerText !== "СВЪРЖИ") {
+            toggleRadioConnection(); // Автоматично връща дизайна, ако сървърът ни ритне
+            alert("Връзката с радио сървъра прекъсна.");
+        }
+    };
+}
+
+function setupMainPttControls() {
+    const ptt = document.getElementById('btn-ptt');
+    // Махаме стари слушатели чрез клониране
+    const newPtt = ptt.cloneNode(true);
+    ptt.parentNode.replaceChild(newPtt, ptt);
+    
+    let isTalking = false;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    
+    function startSpeaking(e) {
+        e.preventDefault();
+        if (isTalking || !wsRadio || wsRadio.readyState !== WebSocket.OPEN) return;
+        isTalking = true;
+        
+        newPtt.style.background = "#F44336";
+        newPtt.style.borderColor = "#F44336";
+        newPtt.innerHTML = "🎙️ В ЕФИР СИ...";
+        
+        audioChunks = [];
+        mediaRecorder = new MediaRecorder(activeRadioStream, { mimeType: 'audio/webm' });
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+        
+        mediaRecorder.onstop = () => {
+            if(audioChunks.length > 0 && wsRadio && wsRadio.readyState === WebSocket.OPEN) {
+                let audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                wsRadio.send(audioBlob);
+            }
+        };
+        
+        mediaRecorder.start();
+    }
+    
+    function stopSpeaking(e) {
+        e.preventDefault();
+        if (!isTalking) return;
+        isTalking = false;
+        
+        newPtt.style.background = "#222";
+        newPtt.style.borderColor = "#00BCD4";
+        newPtt.innerHTML = "🎤 ЗАДРЪЖ И ГОВОРИ";
+        
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+        }
+    }
+    
+    newPtt.addEventListener('pointerdown', startSpeaking);
+    newPtt.addEventListener('pointerup', stopSpeaking);
+    newPtt.addEventListener('pointerleave', stopSpeaking);
+}
+</script>
+</body>
+</html>
