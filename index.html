@@ -173,6 +173,21 @@
 </head>
 <body>
 
+<div id="mic-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:10006; flex-direction:column; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;">
+    <div style="background:#222; border: 2px solid #F44336; padding:20px; border-radius:15px; width:95%; text-align:center; max-width:400px;">
+        <h2 style="color:#F44336; margin-top:0;">🎤 Микрофонът е блокиран!</h2>
+        <p style="color:#fff; font-size:15px;">Браузърът не дава достъп до микрофона, затова радиото не може да тръгне.</p>
+        <div style="background:#111; padding:15px; border-radius:8px; text-align:left; color:#ccc; font-size:14px; margin-bottom:20px; border:1px solid #444;">
+            <b style="color:#FF9800;">Как да го оправиш (Много лесно):</b><br><br>
+            1. Презареди (Опресни) тази страница.<br>
+            2. Натисни пак бутона "СВЪРЖИ".<br>
+            3. Браузърът ще те попита отново. Задължително цъкни <b>"Разреши" (Allow)</b>.<br><br>
+            <i style="color:#888; font-size:12px;">Ако браузърът изобщо не те пита: Цъкни трите точки горе вдясно -> Настройки -> Настройки на сайта -> Микрофон -> Избери този сайт и дай Разреши.</i>
+        </div>
+        <button onclick="document.getElementById('mic-modal').style.display='none'; location.reload();" style="background:#4CAF50; color:#fff; border:none; padding:15px; width:100%; border-radius:10px; font-weight:bold; font-size:16px; cursor:pointer;">🔄 ПРЕЗАРЕДИ СТРАНИЦАТА</button>
+    </div>
+</div>
+
 <div class="menu-overlay" id="menu-overlay" onclick="closeMenu()"></div>
 <div id="slide-menu">
     <div class="menu-title"><span id="menu-title-text">⚙️ Подредба (Каране)</span> <button class="menu-close" onclick="closeMenu()">×</button></div>
@@ -1136,14 +1151,13 @@ async function toggleRadioConnection() {
     
     // Ако не сме свързани -> ВКЛЮЧВАНЕ
     let channel = channelInput.value.trim() || "25";
-    
-    // ТУК Е ТВОЯТ СЪРВЪР ОТ RENDER:
     let serverBase = "wss://tachoradioserver.onrender.com"; 
     
     try {
         activeRadioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch(err) {
-        alert("Няма достъп до микрофона! Разреши го от настройките на браузъра (катинарчето горе вляво).");
+        // ПОКАЗВАМЕ НОВИЯ ЕКРАН ПРИ БЛОКИРАН МИКРОФОН
+        document.getElementById('mic-modal').style.display = 'flex';
         return;
     }
     
