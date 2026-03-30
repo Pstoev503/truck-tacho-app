@@ -607,8 +607,12 @@ window.onload = function() {
     buildCalendar(); updateJokerUI(); updateVisuals(); updateSpecialModeUI(); updateShiftButtonUI(); updateDistUI();
     setInterval(updateUI, 1000); 
 };
-
-
+function logBLE(msg) {
+    let el = document.getElementById('ble-log');
+    el.style.display = 'block';
+    el.innerHTML += `> ${msg}<br>`;
+    el.scrollTop = el.scrollHeight;
+}
 // ==================== WEB BLUETOOTH API + ЗАКЛЮЧВАНЕ НА ЕКРАНА (HEARTBEAT) ====================
 class TachoGen2Connector {
     constructor() {
