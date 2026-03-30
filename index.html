@@ -168,7 +168,7 @@
         .calib-input { width:100%; padding:12px; margin:10px 0; background:#000; border:1px solid #444; color:#fff; border-radius:8px; font-size:18px; text-align:center;}
         
         /* BLE Лог */
-        #ble-log { width: 95%; background: #000; color: #4CAF50; border: 1px solid #333; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; height: 80px; overflow-y: auto; margin-top: 10px; display:none; }
+        #ble-log { width: 95%; background: #000; color: #4CAF50; border: 1px solid #333; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; height: 120px; overflow-y: auto; margin-top: 10px; display:none; }
     </style>
 </head>
 <body>
@@ -518,14 +518,11 @@ let rawTachoLogs = [];
 // 2. Обнови твоята функция handleFIFOIndication:
 function handleFIFOIndication(event) {
     let data = new Uint8Array(event.target.value.buffer);
-    // Превръщаме байтовете в четим шестнадесетичен формат (HEX)
     let hexString = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
-    
     let timestamp = new Date().toISOString();
     let logLine = `[${timestamp}] BLE_RAW: ${hexString}`;
-    
-    logBLE(logLine); // Показва го в черното прозорче на екрана
-    rawTachoLogs.push(logLine); // Запазва го в масива
+    logBLE(logLine); 
+    rawTachoLogs.push(logLine);
 }
 
 // 3. ФУНКЦИЯ ЗА ИЗТЕГЛЯНЕ НА ФАЙЛА В ТЕЛЕФОНА
@@ -533,11 +530,8 @@ function downloadTachoLogs() {
     if (rawTachoLogs.length === 0) {
         alert("Няма събрани данни от тахографа!"); return;
     }
-    // Създаваме текстов файл в паметта на браузъра
     let blob = new Blob([rawTachoLogs.join('\n')], { type: 'text/plain' });
     let url = URL.createObjectURL(blob);
-    
-    // Симулираме натискане на линк, за да се изтегли в папка Downloads
     let a = document.createElement('a');
     a.href = url;
     a.download = `Tacho_Log_${new Date().toISOString().split('T')[0]}.txt`;
@@ -563,11 +557,9 @@ function loadData() {
     let savedScale = parseFloat(localStorage.getItem('th_scale'));
     if(!isNaN(savedScale)) { globalScale = savedScale; document.documentElement.style.setProperty('--ui-scale', globalScale); document.getElementById('ui-scaler').value = globalScale; document.getElementById('scale-val-display').innerText = Math.round(globalScale*100) + "%"; }
 
-    // Зареждане и "Умно зашиване" на новите модули към старото запазено меню
     let savedOrder = localStorage.getItem('th_uiorder'); 
     if(savedOrder) {
         let parsedOrder = JSON.parse(savedOrder);
-        // Добавяме всеки нов модул от defaultOrder, който липсва в запазения ред
         defaultOrder.forEach(id => { if(!parsedOrder.includes(id)) parsedOrder.push(id); });
         uiOrder = parsedOrder;
     } else {
@@ -576,7 +568,6 @@ function loadData() {
     
     let savedCfg = localStorage.getItem('th_uicfg'); 
     if(savedCfg) {
-        // Сливаме запазените настройки с тези по подразбиране (за да не се скрият новите модули завинаги)
         uiConfig = { ...uiConfig, ...JSON.parse(savedCfg) };
     }
     
@@ -619,19 +610,10 @@ window.onload = function() {
 
 
 // ==================== WEB BLUETOOTH API + ЗАКЛЮЧВАНЕ НА ЕКРАНА (HEARTBEAT) ====================
-function logBLE(msg) {
-    let el = document.getElementById('ble-log');
-    el.style.display = 'block';
-    el.innerHTML += `> ${msg}<br>`;
-    el.scrollTop = el.scrollHeight;
-}
-
 class TachoGen2Connector {
     constructor() {
-        this.ITS_SERVICE_UUID = 'eef90782-0000-1000-8000-00805f9b34fb'; 
-        
-        // Характеристика за четене (RX). Провери дали това е точният UUID за твоя модел тахограф!
-        this.ITS_CHARACTERISTIC_RX_UUID = 'eef90784-0000-1000-8000-00805f9b34fb'; 
+        // ТОЧНИЯТ УНИКАЛЕН НОМЕР ОТ СНИМКАТА ЗА VDO ТАХОГРАФА
+        this.ITS_SERVICE_UUID = 'eef90782-55dd-4388-b80b-695aba7a69b5'; 
         
         this.device = null;
         this.server = null;
@@ -658,17 +640,29 @@ class TachoGen2Connector {
             logBLE("Успешна връзка! Стартиране на поддържащ пулс...");
             
             // ==========================================
-            // Абониране за данни (Notifications)
+            // Абониране за данни (УМНО ТЪРСЕНЕ)
             // ==========================================
             logBLE("Абониране за данни от тахографа...");
             const service = await this.server.getPrimaryService(this.ITS_SERVICE_UUID);
-            const rxCharacteristic = await service.getCharacteristic(this.ITS_CHARACTERISTIC_RX_UUID);
             
-            // Стартираме потока от данни
-            await rxCharacteristic.startNotifications();
+            // Вместо да гадаем точния номер на характеристиката, сканираме всичко
+            const characteristics = await service.getCharacteristics();
+            let foundNotify = false;
+
+            for (let char of characteristics) {
+                if (char.properties.notify || char.properties.indicate) {
+                    logBLE("Намерен канал за данни: " + char.uuid);
+                    await char.startNotifications();
+                    char.addEventListener('characteristicvaluechanged', handleFIFOIndication);
+                    foundNotify = true;
+                }
+            }
             
-            // Насочваме всяко ново съобщение към твоята функция
-            rxCharacteristic.addEventListener('characteristicvaluechanged', handleFIFOIndication);
+            if (!foundNotify) {
+                logBLE("Грешка: Не е намерен канал за четене (Notify) в тази услуга!");
+                this.resetUI();
+                return false;
+            }
             
             logBLE("Успешно абониране! В готовност за данни...");
             // ==========================================
@@ -691,7 +685,6 @@ class TachoGen2Connector {
 
     startHeartbeat() {
         if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
-        // Праща сигнал на всеки 15 секунди, за да не бъде изхвърлен от тахографа
         this.keepAliveInterval = setInterval(async () => {
             if (this.server && this.server.connected) {
                 try {
