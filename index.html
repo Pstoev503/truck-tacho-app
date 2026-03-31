@@ -515,6 +515,13 @@ let shiftHistory = {};
 // 1. Масив, в който ще трупаме всичко, което тахографът прати
 let rawTachoLogs = [];
 
+function logBLE(msg) {
+    let el = document.getElementById('ble-log');
+    el.style.display = 'block';
+    el.innerHTML += `> ${msg}<br>`;
+    el.scrollTop = el.scrollHeight;
+}
+
 // 2. Обнови твоята функция handleFIFOIndication:
 function handleFIFOIndication(event) {
     let data = new Uint8Array(event.target.value.buffer);
@@ -607,12 +614,8 @@ window.onload = function() {
     buildCalendar(); updateJokerUI(); updateVisuals(); updateSpecialModeUI(); updateShiftButtonUI(); updateDistUI();
     setInterval(updateUI, 1000); 
 };
-function logBLE(msg) {
-    let el = document.getElementById('ble-log');
-    el.style.display = 'block';
-    el.innerHTML += `> ${msg}<br>`;
-    el.scrollTop = el.scrollHeight;
-}
+
+
 // ==================== WEB BLUETOOTH API + ЗАКЛЮЧВАНЕ НА ЕКРАНА (HEARTBEAT) ====================
 class TachoGen2Connector {
     constructor() {
@@ -644,31 +647,49 @@ class TachoGen2Connector {
             logBLE("Успешна връзка! Стартиране на поддържащ пулс...");
             
             // ==========================================
-            // Абониране за данни (УМНО ТЪРСЕНЕ)
+            // Абониране за данни (УМНО ТЪРСЕНЕ + TX ЗДРАВИСВАНЕ)
             // ==========================================
-            logBLE("Абониране за данни от тахографа...");
+            logBLE("Сканиране за канали (RX и TX)...");
             const service = await this.server.getPrimaryService(this.ITS_SERVICE_UUID);
             
-            // Вместо да гадаем точния номер на характеристиката, сканираме всичко
             const characteristics = await service.getCharacteristics();
-            let foundNotify = false;
+            let rxChar = null;
+            let txChar = null;
 
             for (let char of characteristics) {
                 if (char.properties.notify || char.properties.indicate) {
-                    logBLE("Намерен канал за данни: " + char.uuid);
-                    await char.startNotifications();
-                    char.addEventListener('characteristicvaluechanged', handleFIFOIndication);
-                    foundNotify = true;
+                    rxChar = char;
+                    logBLE("Намерен канал за слушане (RX): " + char.uuid);
+                }
+                if (char.properties.write || char.properties.writeWithoutResponse) {
+                    txChar = char;
+                    logBLE("Намерен канал за команди (TX): " + char.uuid);
                 }
             }
             
-            if (!foundNotify) {
-                logBLE("Грешка: Не е намерен канал за четене (Notify) в тази услуга!");
+            if (rxChar) {
+                await rxChar.startNotifications();
+                rxChar.addEventListener('characteristicvaluechanged', handleFIFOIndication);
+                logBLE("Успешно абониране за слушане (RX)...");
+            } else {
+                logBLE("Грешка: Липсва RX канал!");
                 this.resetUI();
                 return false;
             }
-            
-            logBLE("Успешно абониране! В готовност за данни...");
+
+            // Изпращане на законен "поздрав" към тахографа, за да го събудим
+            if (txChar) {
+                logBLE("Изпращане на команда за събуждане (Handshake)...");
+                try {
+                    let payload = new Uint8Array([0x01]);
+                    await txChar.writeValue(payload);
+                    logBLE("Командата е изпратена успешно!");
+                } catch (e) {
+                    logBLE("Грешка при изпращане: " + e);
+                }
+            } else {
+                logBLE("Внимание: Не е намерен TX канал. Тахографът може да мълчи.");
+            }
             // ==========================================
 
             let btn = document.getElementById('btn-ble-connect');
