@@ -168,7 +168,7 @@
         .calib-input { width:100%; padding:12px; margin:10px 0; background:#000; border:1px solid #444; color:#fff; border-radius:8px; font-size:18px; text-align:center;}
         
         /* BLE Лог */
-        #ble-log { width: 95%; background: #000; color: #4CAF50; border: 1px solid #333; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; height: 120px; overflow-y: auto; margin-top: 10px; display:none; }
+        #ble-log { width: 95%; background: #000; color: #4CAF50; border: 1px solid #333; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; height: 140px; overflow-y: auto; margin-top: 10px; display:none; }
     </style>
 </head>
 <body>
@@ -487,7 +487,7 @@ let courseDistance = 0.0, shiftDistance = 0.0, calibFactor = 1.0;
 let totalDistance = 0.0, lastLat = null, lastLon = null, watchId = null;
 let currentCountryCode = ""; let hasManualEntryToday = false;
 
-// ДИНАМИЧНО ТАБЛО CONFIG
+// ДИНАМИЧНО ТАБЛО CONFIG - КАРАНЕ
 const modNames = {
     'mod-jokers': 'Жокери (Горе)', 'mod-start-btns': 'Старт Бутони', 'mod-tacho': 'Главен Тахограф', 'mod-radio': 'Глобално Радио', 'mod-daily': 'Дневно Каране',
     'mod-shift': 'Работна Смяна', 'mod-speed': 'Скорост и Пробег', 'mod-special': 'Специални Режими', 'mod-weekly': 'Седмични Лимити', 'mod-calendar': 'Календар'
@@ -496,6 +496,7 @@ let defaultOrder = ['mod-jokers', 'mod-start-btns', 'mod-tacho', 'mod-radio', 'm
 let uiOrder = [];
 let uiConfig = { 'mod-jokers': true, 'mod-start-btns': true, 'mod-tacho': true, 'mod-radio': true, 'mod-daily': true, 'mod-shift': true, 'mod-speed': true, 'mod-special': true, 'mod-weekly': true, 'mod-calendar': true };
 
+// ДИНАМИЧНО ТАБЛО CONFIG - ПОЧИВКИ
 const modNamesRest = {
     'mod-rest-jokers': 'Жокери', 'mod-rest-tacho': 'Таймер Почивка', 'mod-rest-special': 'Ръчно / Ферибот', 'mod-rest-info45': '45 Мин Пауза',
     'mod-rest-split': '15+30 Мин', 'mod-rest-dailysplit': '3+9 Часа', 'mod-rest-weekly': 'Дневна / Седмична'
@@ -505,12 +506,13 @@ let uiOrderRest = [];
 let uiConfigRest = { 'mod-rest-jokers': true, 'mod-rest-tacho': true, 'mod-rest-special': true, 'mod-rest-info45': true, 'mod-rest-split': true, 'mod-rest-dailysplit': true, 'mod-rest-weekly': true };
 
 let globalScale = 1.0;
+
 let overspeedMutedUntil = 0; let muteUntilStop = false; let muteForToday = false;
 let osCounter = 30; let isOsActive = false;
 let warning4h15mShown = false; let isEngineOn = false; let lastMotionTime = Date.now(); let wakeLock = null;
 let shiftHistory = {};
 
-// Глобален масив за логовете
+// 1. Масив, в който ще трупаме всичко, което тахографът прати
 let rawTachoLogs = [];
 
 function logBLE(msg) {
@@ -518,6 +520,16 @@ function logBLE(msg) {
     el.style.display = 'block';
     el.innerHTML += `> ${msg}<br>`;
     el.scrollTop = el.scrollHeight;
+}
+
+// 2. Обнови твоята функция handleFIFOIndication:
+function handleFIFOIndication(event) {
+    let data = new Uint8Array(event.target.value.buffer);
+    let hexString = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
+    let timestamp = new Date().toISOString();
+    let logLine = `[${timestamp}] BLE_RAW: ${hexString}`;
+    logBLE(logLine); 
+    rawTachoLogs.push(logLine);
 }
 
 // 3. ФУНКЦИЯ ЗА ИЗТЕГЛЯНЕ НА ФАЙЛА В ТЕЛЕФОНА
@@ -607,13 +619,16 @@ window.onload = function() {
 // ==================== WEB BLUETOOTH API + ЗАКЛЮЧВАНЕ НА ЕКРАНА (HEARTBEAT) ====================
 class TachoGen2Connector {
     constructor() {
+        // ТОЧНИЯТ УНИКАЛЕН НОМЕР ОТ СНИМКАТА ЗА VDO ТАХОГРАФА
         this.ITS_SERVICE_UUID = 'eef90782-55dd-4388-b80b-695aba7a69b5'; 
+        this.FIFO_CHAR_UUID   = '29d3a479-1592-47df-80a4-afa742d369bb';
+        this.CREDITS_CHAR_UUID= 'db9c4128-bff3-41fe-a306-fb6f9a8aeb2d';
+        
         this.device = null;
         this.server = null;
-        this.txChar = null;
-        this.rxChar = null;
         this.keepAliveInterval = null; 
-        this.handshakeStep = 0; // Следим докъде сме стигнали в разговора
+        this.fifoChar = null;
+        this.creditsChar = null;
     }
 
     async connect() {
@@ -627,44 +642,37 @@ class TachoGen2Connector {
                 optionalServices: [this.ITS_SERVICE_UUID]
             });
             
+            logBLE("Открито устройство: " + this.device.name);
             logBLE("Свързване към GATT сървъра...");
+            
             this.device.addEventListener('gattserverdisconnected', (e) => this.onDisconnected(e));
             this.server = await this.device.gatt.connect();
             
-            logBLE("Сканиране за канали (RX и TX)...");
+            logBLE("Успешна връзка! Извличане на услугите...");
             const service = await this.server.getPrimaryService(this.ITS_SERVICE_UUID);
-            const characteristics = await service.getCharacteristics();
-
-            for (let char of characteristics) {
-                if (char.properties.notify || char.properties.indicate) {
-                    this.rxChar = char;
-                    logBLE("Намерен RX канал: " + char.uuid);
-                }
-                if (char.properties.write || char.properties.writeWithoutResponse) {
-                    this.txChar = char;
-                    logBLE("Намерен TX канал: " + char.uuid);
-                }
-            }
             
-            // Закачаме се да слушаме, ако има канал
-            if (this.rxChar) {
-                await this.rxChar.startNotifications();
-                this.rxChar.addEventListener('characteristicvaluechanged', (e) => this.handleData(e));
-                logBLE("Успешно абониране за слушане (RX)...");
-            } else {
-                logBLE("Грешка: Липсва RX канал!");
-                this.resetUI();
-                return false;
-            }
-
-            // Първи удар: Казваме Здравей (01)
-            if (this.txChar) {
-                this.handshakeStep = 0;
-                logBLE("Изпращане на команда за събуждане (01)...");
-                await this.sendCommand([0x01]);
-            } else {
-                logBLE("Внимание: Не е намерен TX канал. Тахографът може да мълчи.");
-            }
+            logBLE("Търсене на FIFO и Кредитни канали...");
+            this.fifoChar = await service.getCharacteristic(this.FIFO_CHAR_UUID);
+            this.creditsChar = await service.getCharacteristic(this.CREDITS_CHAR_UUID);
+            
+            // Абонираме се за FIFO канала (Данни)
+            logBLE("Абониране за данни (FIFO)...");
+            await this.fifoChar.startNotifications();
+            this.fifoChar.addEventListener('characteristicvaluechanged', handleFIFOIndication);
+            
+            // Абонираме се за Кредитния канал
+            logBLE("Абониране за потока (Credits)...");
+            await this.creditsChar.startNotifications();
+            this.creditsChar.addEventListener('characteristicvaluechanged', (event) => {
+                let val = new Uint8Array(event.target.value.buffer)[0];
+                logBLE("Получени кредити от тахографа: " + val);
+            });
+            
+            // Изпращане на нашите кредити към тахографа (отключване на данните)
+            logBLE("Депозиране на кредити (0x08) за отключване на данните...");
+            let creditsPayload = new Uint8Array([0x08]);
+            await this.creditsChar.writeValue(creditsPayload);
+            logBLE("Кредитите са изпратени успешно. Очакваме данни...");
 
             let btn = document.getElementById('btn-ble-connect');
             btn.classList.add('connected');
@@ -680,43 +688,6 @@ class TachoGen2Connector {
             this.resetUI();
             return false;
         }
-    }
-
-    // Универсална функция за изпращане на байтове
-    async sendCommand(bytesArray) {
-        if (!this.txChar) return;
-        try {
-            let payload = new Uint8Array(bytesArray);
-            await this.txChar.writeValue(payload);
-            let hexString = Array.from(payload).map(b => b.toString(16).padStart(2,'0')).join(' ');
-            logBLE(`[TX] Изпратено: ${hexString}`);
-            rawTachoLogs.push(`[${new Date().toISOString()}] TX: ${hexString}`);
-        } catch (e) {
-            logBLE(`Грешка при TX: ${e}`);
-        }
-    }
-
-    // Нашата нова интелигентна функция за водене на диалог
-    async handleData(event) {
-        let data = new Uint8Array(event.target.value.buffer);
-        let hexString = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
-        logBLE(`[RX] Получено: ${hexString}`);
-        rawTachoLogs.push(`[${new Date().toISOString()}] RX: ${hexString}`);
-
-        // Ако тахографът потвърди първото ни здрависване (02)
-        if (data[0] === 0x02 && this.handshakeStep === 0) {
-            this.handshakeStep = 1;
-            logBLE("Тахографът потвърди връзката! Искане на ITS данни...");
-            // Изстрелваме следващата команда (0x03) за да отпушим реалния поток данни
-            await this.sendCommand([0x03]); 
-        } 
-        // Ако иска още едно потвърждение (понякога VDO искат троен handshake)
-        else if (data[0] === 0x02 && this.handshakeStep === 1) {
-            this.handshakeStep = 2;
-            logBLE("Допълнително потвърждение... Искане на данни...");
-            await this.sendCommand([0x04]);
-        }
-        // Ако видим дълги редове с много цифри, значи кранчето е отворено успешно!
     }
 
     startHeartbeat() {
