@@ -522,14 +522,43 @@ function logBLE(msg) {
     el.scrollTop = el.scrollHeight;
 }
 
-// 2. Обнови твоята функция handleFIFOIndication:
+// 2. Обновена функция: Автоматично прихващане на времената и синхронизиране
 function handleFIFOIndication(event) {
     let data = new Uint8Array(event.target.value.buffer);
     let hexString = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
-    let timestamp = new Date().toISOString();
-    let logLine = `[${timestamp}] BLE_RAW: ${hexString}`;
-    logBLE(logLine); 
-    rawTachoLogs.push(logLine);
+    
+    // Проверка дали е отговор за ВРЕМЕТО (UDS Успех 62, за код F9 23)
+    if (data.length >= 7 && data[2] === 0x62 && data[3] === 0xF9 && data[4] === 0x23) {
+        // Тахографът връща времето в минути (2 байта: MSB и LSB)
+        let drivingMinutes = (data[5] << 8) | data[6];
+        logBLE(`[СИНХРОНИЗАЦИЯ] Каране от тахографа: ${drivingMinutes} мин.`);
+        
+        // Магията: Синхронизираме вътрешния таймер на приложението!
+        let now = Date.now();
+        let sessionSecs = Math.floor((now - modeStartTime) / 1000);
+        
+        // Първо запазваме натрупаните до момента секунди за другите таймери
+        if(!isOutMode) {
+            if(currentState === 'drive') { baseDailyDrive += sessionSecs; baseWeeklyDrive += sessionSecs; baseBiWeeklyDrive += sessionSecs; baseWorkTime += sessionSecs; }
+            else if(currentState === 'work') { baseWorkTime += sessionSecs; }
+            else if(currentState === 'rest') { baseRestTime += sessionSecs; }
+        } else {
+            if(currentState === 'rest') baseRestTime += sessionSecs; 
+            else if (currentState === 'work') baseWorkTime += sessionSecs;
+        }
+        
+        // Сега актуализираме конкретно карането с абсолютната стойност от тахографа
+        baseDriveTime = drivingMinutes * 60; 
+        // Рестартираме хронометъра, за да брои правилно до следващата синхронизация
+        modeStartTime = now; 
+        
+        updateUI(); // Опреснява зеления кръг веднага на екрана!
+    } else {
+        // За други системни съобщения показваме само кратък лог, за да не пълним екрана
+        logBLE(`> Получени данни: ${hexString.substring(0, 14)}...`);
+    }
+    
+    rawTachoLogs.push(hexString);
 }
 
 // 3. ФУНКЦИЯ ЗА ИЗТЕГЛЯНЕ НА ФАЙЛА В ТЕЛЕФОНА
@@ -619,7 +648,7 @@ window.onload = function() {
 // ==================== WEB BLUETOOTH API + ЗАКЛЮЧВАНЕ НА ЕКРАНА (HEARTBEAT) ====================
 class TachoGen2Connector {
     constructor() {
-        // НОВИТЕ ОФИЦИАЛНИ UUID ОТ СПЕЦИФИКАЦИЯТА (DIAGNOSTICS SERVICE)
+        // ОФИЦИАЛНИ UUID ОТ СПЕЦИФИКАЦИЯТА (DIAGNOSTICS SERVICE)
         this.ITS_SERVICE_UUID = 'fa213def-aef4-475c-bcea-0a8d69073efc'; 
         this.FIFO_CHAR_UUID   = 'e413960c-75ba-4ca9-8a67-99bc052a1b13';
         this.CREDITS_CHAR_UUID= 'e168d1a6-304f-42b4-ab96-4cd1d4efebd9';
@@ -627,6 +656,7 @@ class TachoGen2Connector {
         this.device = null;
         this.server = null;
         this.keepAliveInterval = null; 
+        this.pollInterval = null;
         this.fifoChar = null;
         this.creditsChar = null;
     }
@@ -665,29 +695,28 @@ class TachoGen2Connector {
             await this.creditsChar.startNotifications();
             this.creditsChar.addEventListener('characteristicvaluechanged', (event) => {
                 let val = new Uint8Array(event.target.value.buffer)[0];
-                logBLE("Получени кредити от тахографа: " + val);
             });
             
-            // Изпращане на нашите кредити към тахографа
-            logBLE("Депозиране на кредити (0x08) за отключване на данните...");
-            let creditsPayload = new Uint8Array([0x08]);
-            await this.creditsChar.writeValue(creditsPayload);
-            logBLE("Кредитите са изпратени успешно. Очакваме отговор...");
+            // Изпращане на първоначални кредити към тахографа
+            logBLE("Отключване на данните (Credits 0x08)...");
+            await this.creditsChar.writeValue(new Uint8Array([0x08]));
 
-            // ИЗПРАЩАНЕ НА UDS ЗАЯВКА ПО СПЕЦИФИКАЦИЯ
+            // ИЗПРАЩАНЕ НА UDS ЗАЯВКА ЗА ВРЕМЕТО (На всеки 10 секунди)
             setTimeout(async () => {
-                logBLE("Изпращане на UDS заявка за четене на данни...");
-                // Формат: [Общо пакети, Пореден номер на пакет, UDS Команда, Данни, Данни...]
-                // 0x01 (1 пакет общо), 0x01 (текущ пакет 1)
-                // 0x22 (ReadDataByIdentifier), 0xF1, 0x90 (Код за VIN номер)
-                let udsRequest = new Uint8Array([0x01, 0x01, 0x22, 0xF1, 0x90]);
-                try {
-                    await this.fifoChar.writeValue(udsRequest);
-                    logBLE("UDS заявката е изпратена!");
-                } catch(e) {
-                    logBLE("Грешка при UDS: " + e);
-                }
-            }, 1500);
+                logBLE("Стартиране на жива синхронизация (ISO 16844-7)...");
+                this.pollInterval = setInterval(async () => {
+                    if (this.server && this.server.connected) {
+                        try {
+                            // 1. Позволяваме на тахографа да отговори (Даваме 1 кредит)
+                            await this.creditsChar.writeValue(new Uint8Array([0x01]));
+                            
+                            // 2. Питаме за "Непрекъснато Каране" (DID 0xF923)
+                            let udsRequest = new Uint8Array([0x01, 0x01, 0x22, 0xF9, 0x23]);
+                            await this.fifoChar.writeValue(udsRequest);
+                        } catch(e) { }
+                    }
+                }, 10000);
+            }, 2000);
 
             let btn = document.getElementById('btn-ble-connect');
             btn.classList.add('connected');
@@ -719,6 +748,7 @@ class TachoGen2Connector {
     onDisconnected(event) {
         logBLE("Връзката с тахографа прекъсна!");
         if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+        if (this.pollInterval) clearInterval(this.pollInterval);
         this.resetUI();
     }
 
