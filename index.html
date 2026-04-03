@@ -522,22 +522,19 @@ function logBLE(msg) {
     el.scrollTop = el.scrollHeight;
 }
 
-// 2. Обновена функция: Автоматично прихващане на времената и синхронизиране
+// 2. Обновена функция: Автоматично прихващане на времената и грешките
 function handleFIFOIndication(event) {
     let data = new Uint8Array(event.target.value.buffer);
     let hexString = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
     
-    // Проверка дали е отговор за ВРЕМЕТО (UDS Успех 62, за код F9 23)
+    // Проверка дали е Успешен отговор (0x62) за код F9 23
     if (data.length >= 7 && data[2] === 0x62 && data[3] === 0xF9 && data[4] === 0x23) {
-        // Тахографът връща времето в минути (2 байта: MSB и LSB)
         let drivingMinutes = (data[5] << 8) | data[6];
         logBLE(`[СИНХРОНИЗАЦИЯ] Каране от тахографа: ${drivingMinutes} мин.`);
         
-        // Магията: Синхронизираме вътрешния таймер на приложението!
         let now = Date.now();
         let sessionSecs = Math.floor((now - modeStartTime) / 1000);
         
-        // Първо запазваме натрупаните до момента секунди за другите таймери
         if(!isOutMode) {
             if(currentState === 'drive') { baseDailyDrive += sessionSecs; baseWeeklyDrive += sessionSecs; baseBiWeeklyDrive += sessionSecs; baseWorkTime += sessionSecs; }
             else if(currentState === 'work') { baseWorkTime += sessionSecs; }
@@ -547,15 +544,16 @@ function handleFIFOIndication(event) {
             else if (currentState === 'work') baseWorkTime += sessionSecs;
         }
         
-        // Сега актуализираме конкретно карането с абсолютната стойност от тахографа
         baseDriveTime = drivingMinutes * 60; 
-        // Рестартираме хронометъра, за да брои правилно до следващата синхронизация
         modeStartTime = now; 
-        
-        updateUI(); // Опреснява зеления кръг веднага на екрана!
-    } else {
-        // За други системни съобщения показваме само кратък лог, за да не пълним екрана
-        logBLE(`> Получени данни: ${hexString.substring(0, 14)}...`);
+        updateUI(); 
+    } 
+    // Проверка дали е ОТКАЗ / ГРЕШКА (0x7F)
+    else if (data.length >= 5 && data[2] === 0x7F) {
+        logBLE(`[ОТКАЗ ОТ ТАХОГРАФА]: Грешка при заявката. Код: ${hexString}`);
+    } 
+    else {
+        logBLE(`> Получени: ${hexString.substring(0, 20)}...`);
     }
     
     rawTachoLogs.push(hexString);
@@ -695,11 +693,12 @@ class TachoGen2Connector {
             await this.creditsChar.startNotifications();
             this.creditsChar.addEventListener('characteristicvaluechanged', (event) => {
                 let val = new Uint8Array(event.target.value.buffer)[0];
+                logBLE("Получени кредити от тахографа: " + val);
             });
             
-            // Изпращане на първоначални кредити към тахографа
-            logBLE("Отключване на данните (Credits 0x08)...");
-            await this.creditsChar.writeValue(new Uint8Array([0x08]));
+            // Депозит на МАКСИМАЛЕН брой кредити, за да не блокираме цикъла
+            logBLE("Депозиране на 255 кредита (0xFF) за отключване на данните...");
+            await this.creditsChar.writeValue(new Uint8Array([0xFF]));
 
             // ИЗПРАЩАНЕ НА UDS ЗАЯВКА ЗА ВРЕМЕТО (На всеки 10 секунди)
             setTimeout(async () => {
@@ -707,13 +706,13 @@ class TachoGen2Connector {
                 this.pollInterval = setInterval(async () => {
                     if (this.server && this.server.connected) {
                         try {
-                            // 1. Позволяваме на тахографа да отговори (Даваме 1 кредит)
-                            await this.creditsChar.writeValue(new Uint8Array([0x01]));
-                            
-                            // 2. Питаме за "Непрекъснато Каране" (DID 0xF923)
+                            // Пращаме САМО заявката, без да искаме нови кредити, за да няма задръстване!
                             let udsRequest = new Uint8Array([0x01, 0x01, 0x22, 0xF9, 0x23]);
                             await this.fifoChar.writeValue(udsRequest);
-                        } catch(e) { }
+                            logBLE("> Заявка изпратена...");
+                        } catch(e) {
+                            logBLE("Грешка при заявка: " + e);
+                        }
                     }
                 }, 10000);
             }, 2000);
