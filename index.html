@@ -693,12 +693,12 @@ class TachoGen2Connector {
             await this.creditsChar.startNotifications();
             this.creditsChar.addEventListener('characteristicvaluechanged', (event) => {
                 let val = new Uint8Array(event.target.value.buffer)[0];
-                logBLE("Получени кредити от тахографа: " + val);
+                // logBLE("Получени кредити от тахографа: " + val); // Скриваме го, за да не пълни лога
             });
             
-            // Депозит на МАКСИМАЛЕН брой кредити, за да не блокираме цикъла
-            logBLE("Депозиране на 255 кредита (0xFF) за отключване на данните...");
-            await this.creditsChar.writeValue(new Uint8Array([0xFF]));
+            // Депозит на 10 кредита (0x0A) - ВАЖНО: 0xFF означава ПРЕКЪСВАНЕ!
+            logBLE("Отключване на данните (Credits 0x0A)...");
+            await this.creditsChar.writeValue(new Uint8Array([0x0A]));
 
             // ИЗПРАЩАНЕ НА UDS ЗАЯВКА ЗА ВРЕМЕТО (На всеки 10 секунди)
             setTimeout(async () => {
@@ -706,10 +706,13 @@ class TachoGen2Connector {
                 this.pollInterval = setInterval(async () => {
                     if (this.server && this.server.connected) {
                         try {
-                            // Пращаме САМО заявката, без да искаме нови кредити, за да няма задръстване!
+                            // 1. Позволяваме на тахографа да отговори (Даваме 1 кредит)
+                            await this.creditsChar.writeValue(new Uint8Array([0x01]));
+                            
+                            // 2. Питаме за "Непрекъснато Каране" (DID 0xF923)
                             let udsRequest = new Uint8Array([0x01, 0x01, 0x22, 0xF9, 0x23]);
                             await this.fifoChar.writeValue(udsRequest);
-                            logBLE("> Заявка изпратена...");
+                            logBLE("> Заявка за време изпратена...");
                         } catch(e) {
                             logBLE("Грешка при заявка: " + e);
                         }
