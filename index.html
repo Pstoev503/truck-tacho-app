@@ -522,42 +522,54 @@ function logBLE(msg) {
     el.scrollTop = el.scrollHeight;
 }
 
-// 2. Функция за прихващане на времената и грешките (вкл. VIN тест)
+// 2. ИНТЕЛИГЕНТЕН СКЕНЕР: Разпознаване на различни отговори от Тахографа
 function handleFIFOIndication(event) {
     let data = new Uint8Array(event.target.value.buffer);
     let hexString = Array.from(data).map(b => b.toString(16).padStart(2,'0')).join(' ');
     
-    // Проверка дали е Успешен отговор (0x62) за код F9 23 (Време)
-    if (data.length >= 7 && data[2] === 0x62 && data[3] === 0xF9 && data[4] === 0x23) {
-        let drivingMinutes = (data[5] << 8) | data[6];
-        logBLE(`[СИНХРОНИЗАЦИЯ] Каране от тахографа: ${drivingMinutes} мин.`);
+    // УСПЕШЕН ОТГОВОР ОТ UDS (0x62)
+    if (data.length >= 7 && data[2] === 0x62) {
+        let currentDid = (data[3] << 8) | data[4]; // Сглобяваме DIDs кода
         
-        let now = Date.now();
-        let sessionSecs = Math.floor((now - modeStartTime) / 1000);
-        
-        if(!isOutMode) {
-            if(currentState === 'drive') { baseDailyDrive += sessionSecs; baseWeeklyDrive += sessionSecs; baseBiWeeklyDrive += sessionSecs; baseWorkTime += sessionSecs; }
-            else if(currentState === 'work') { baseWorkTime += sessionSecs; }
-            else if(currentState === 'rest') { baseRestTime += sessionSecs; }
-        } else {
-            if(currentState === 'rest') baseRestTime += sessionSecs; 
-            else if (currentState === 'work') baseWorkTime += sessionSecs;
+        // F9 23 - Непрекъснато каране (Continuous Driving Time)
+        if (currentDid === 0xF923) {
+            let drivingMinutes = (data[5] << 8) | data[6];
+            logBLE(`[СИНХРОНИЗАЦИЯ] Текущо Каране: ${drivingMinutes} мин.`);
+            baseDriveTime = drivingMinutes * 60;
+            if (currentState !== 'drive') setManualState('drive');
+            modeStartTime = Date.now();
         }
-        
-        baseDriveTime = drivingMinutes * 60; 
-        modeStartTime = now; 
-        updateUI(); 
+        // F9 2C - Натрупана почивка (Cumulative Break Time)
+        else if (currentDid === 0xF92C) {
+            let restMinutes = (data[5] << 8) | data[6];
+            logBLE(`[СИНХРОНИЗАЦИЯ] Натрупана Почивка: ${restMinutes} мин.`);
+            baseRestTime = restMinutes * 60;
+            if (currentState !== 'rest') setManualState('rest');
+            modeStartTime = Date.now();
+        }
+        // F9 2D - Текущо дневно каране (Current Daily Driving Time)
+        else if (currentDid === 0xF92D) {
+            let dailyMinutes = (data[5] << 8) | data[6];
+            logBLE(`[СИНХРОНИЗАЦИЯ] Дневно Каране: ${dailyMinutes} мин.`);
+            baseDailyDrive = dailyMinutes * 60;
+        }
+        // F9 21 - Текуща Активност (Working State: 0=Почивка, 1=Готовност, 2=Работа, 3=Каране)
+        else if (currentDid === 0xF921) {
+            let activity = data[5];
+            logBLE(`[СИНХРОНИЗАЦИЯ] Активност на водача: Код ${activity}`);
+            if(activity === 0 && currentState !== 'rest') setManualState('rest');
+            else if(activity === 2 && currentState !== 'work') setManualState('work');
+            // Забележка: Карането (3) се синхронизира автоматично от таймера F923
+        }
+        updateUI(); // Опресняване на екрана веднага след промяна
     } 
-    // Проверка дали е Успешен отговор за VIN (0xF190)
-    else if (data.length >= 7 && data[2] === 0x62 && data[3] === 0xF1 && data[4] === 0x90) {
-        logBLE(`[VIN ПОТВЪРДЕН]: ${hexString.substring(15)}`);
-    }
-    // Проверка дали е ОТКАЗ / ГРЕШКА (0x7F)
+    // ОТХВЪРЛЕНА ЗАЯВКА ОТ ТАХОГРАФА (0x7F) - Прескачаме тихо
     else if (data.length >= 5 && data[2] === 0x7F) {
-        logBLE(`[ОТКАЗ ОТ ТАХОГРАФА]: Грешка при заявката. Код: ${hexString}`);
+        logBLE(`[ОТКАЗ] Тахографът не поддържа този код: ${hexString}`);
     } 
     else {
-        logBLE(`> Получени: ${hexString.substring(0, 20)}...`);
+        // Системни данни / неразпознат формат
+        // logBLE(`> Получени: ${hexString.substring(0, 20)}...`); 
     }
     
     rawTachoLogs.push(hexString);
@@ -661,7 +673,15 @@ class TachoGen2Connector {
         this.pollInterval = null;
         this.fifoChar = null;
         this.creditsChar = null;
-        this.toggleRequest = false;
+        
+        // ОПАШКА СЪС ЗАЯВКИ (Polling Queue) - Ще върти тези кодове един след друг
+        this.pollQueue = [
+            { name: 'Каране (Непрекъснато)', did: [0xF9, 0x23] },
+            { name: 'Почивка (Натрупана)', did: [0xF9, 0x2C] },
+            { name: 'Каране (Дневно)', did: [0xF9, 0x2D] },
+            { name: 'Статус (Активност)', did: [0xF9, 0x21] }
+        ];
+        this.pollIndex = 0;
     }
 
     async connect() {
@@ -704,30 +724,31 @@ class TachoGen2Connector {
             logBLE("Отключване на данните (Credits 0x0A)...");
             await this.creditsChar.writeValue(new Uint8Array([0x0A]));
 
-            // ИЗПРАЩАНЕ НА UDS ЗАЯВКА (На всеки 10 секунди)
+            // СТАРТИРАНЕ НА ИНТЕЛИГЕНТНАТА ОПАШКА ЗА ЗАЯВКИ
             setTimeout(async () => {
-                logBLE("Стартиране на жива синхронизация (ISO 16844-7)...");
+                logBLE("Стартиране на масова жива синхронизация (ISO 16844-7)...");
                 this.pollInterval = setInterval(async () => {
                     if (this.server && this.server.connected) {
                         try {
-                            // Редуваме заявките за тест (Един път VIN, един път Време)
-                            let udsRequest;
-                            if (this.toggleRequest) {
-                                udsRequest = new Uint8Array([0x01, 0x01, 0x22, 0xF9, 0x23]); // Време
-                                logBLE("> Заявка за време изпратена...");
-                            } else {
-                                udsRequest = new Uint8Array([0x01, 0x01, 0x22, 0xF1, 0x90]); // VIN
-                                logBLE("> Заявка за VIN изпратена...");
-                            }
-                            this.toggleRequest = !this.toggleRequest;
+                            // Взимаме текущата заявка от списъка
+                            let currentRequest = this.pollQueue[this.pollIndex];
                             
-                            // Само питаме за данни, БЕЗ да спамим кредити!
+                            // Формираме UDS пакета
+                            let udsRequest = new Uint8Array([0x01, 0x01, 0x22, currentRequest.did[0], currentRequest.did[1]]);
                             await this.fifoChar.writeValue(udsRequest);
+                            
+                            // logBLE(`> Заявка за ${currentRequest.name} изпратена...`); // Скриваме за да не спами
+                            
+                            // Преместваме индекса за следващия път
+                            this.pollIndex++;
+                            if (this.pollIndex >= this.pollQueue.length) {
+                                this.pollIndex = 0;
+                            }
                         } catch(e) {
                             logBLE("Грешка при заявка: " + e);
                         }
                     }
-                }, 10000);
+                }, 5000); // На всеки 5 секунди пита за различно нещо
             }, 2000);
 
             let btn = document.getElementById('btn-ble-connect');
