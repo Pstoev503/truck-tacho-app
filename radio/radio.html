@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="bg" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Лична Радиостанция</title>
+    <style>
+        body { background: #111; color: #fff; font-family: sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; box-sizing: border-box; }
+        .header { font-size: 24px; font-weight: bold; color: #2196F3; margin-bottom: 20px; text-transform: uppercase; text-align: center; }
+        
+        .setup-box { background: #222; border: 1px solid #333; padding: 20px; border-radius: 15px; width: 100%; max-width: 400px; text-align: center; margin-bottom: 20px; }
+        .input-label { display: block; font-size: 12px; color: #aaa; margin-bottom: 5px; font-weight: bold; text-transform: uppercase; }
+        .channel-input { width: 100%; background: #000; border: 2px solid #2196F3; color: #fff; font-size: 20px; padding: 10px; border-radius: 8px; text-align: center; box-sizing: border-box; margin-bottom: 15px; font-weight: bold; }
+        
+        .btn-connect { background: #2196F3; color: #fff; border: none; padding: 15px; font-size: 16px; font-weight: bold; border-radius: 8px; width: 100%; cursor: pointer; transition: 0.3s; }
+        .btn-connect.connected { background: #4CAF50; }
+        .btn-connect:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .radio-container { display: none; width: 100%; max-width: 400px; flex-direction: column; align-items: center; flex: 1; justify-content: center; }
+        .status-text { font-size: 14px; color: #4CAF50; font-weight: bold; margin-bottom: 30px; text-transform: uppercase; text-align: center;}
+        
+        .btn-ptt { background: #222; border: 6px solid #4CAF50; color: #fff; width: 250px; height: 250px; border-radius: 50%; font-size: 22px; font-weight: bold; cursor: pointer; user-select: none; touch-action: none; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(76,175,80,0.3); transition: 0.1s; }
+        .btn-ptt:active { transform: scale(0.95); }
+        .btn-ptt.recording { background: #F44336; border-color: #F44336; box-shadow: 0 0 40px rgba(244,67,54,0.6); }
+        
+        .log { margin-top: auto; font-size: 10px; color: #666; font-family: monospace; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <div class="header">🎙️ Web PTT Радио</div>
+
+    <div class="setup-box" id="setup-box">
+        <label class="input-label">Име на канал (пиши на латиница):</label>
+        <input type="text" id="input-channel" class="channel-input" placeholder="naprimer: semeistvo" value="test">
+        
+        <label class="input-label">Сървър (WebSocket URL):</label>
+        <input type="text" id="input-server" class="channel-input" style="font-size: 14px; font-weight:normal;" placeholder="wss://tvoq-survar.com" value="wss://tvoq-survar.com">
+        
+        <button class="btn-connect" id="btn-connect" onclick="connectRadio()">СВЪРЗВАНЕ</button>
+    </div>
+
+    <div class="radio-container" id="radio-container">
+        <div class="status-text" id="status-text">Свързан към канал: TEST</div>
+        
+        <button class="btn-ptt" id="btn-ptt">
+            <span style="font-size:40px; margin-bottom:10px;">🎤</span>
+            ЗАДРЪЖ И<br>ГОВОРИ
+        </button>
+        
+        <button style="margin-top:40px; background:transparent; border:1px solid #555; color:#aaa; padding:10px 20px; border-radius:8px; cursor:pointer;" onclick="disconnectRadio()">Откачи се от канала</button>
+    </div>
+
+    <div class="log" id="log-text">Готовност за работа.</div>
+
+    <script>
+        let ws = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isTalking = false;
+        let activeStream = null;
+
+        const setupBox = document.getElementById('setup-box');
+        const radioContainer = document.getElementById('radio-container');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnPtt = document.getElementById('btn-ptt');
+        const logText = document.getElementById('log-text');
+        const statusText = document.getElementById('status-text');
+
+        function log(msg) { logText.innerText = msg; console.log(msg); }
+
+        async function connectRadio() {
+            let channel = document.getElementById('input-channel').value.trim();
+            let serverBase = document.getElementById('input-server').value.trim();
+            
+            if(!channel || !serverBase) { alert("Въведи сървър и канал!"); return; }
+
+            // 1. Искаме достъп до микрофона веднага при клик на "Свързване" (за да няма проблеми с правата после)
+            try {
+                activeStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                log("Микрофонът е разрешен.");
+            } catch(err) {
+                alert("Няма достъп до микрофона! Разреши го от настройките на браузъра.");
+                log("Грешка микрофон: " + err);
+                return;
+            }
+
+            // 2. Свързване към WebSocket
+            btnConnect.innerText = "СВЪРЗВАНЕ...";
+            btnConnect.disabled = true;
+
+            // Формираме URL: wss://tvoq-survar.com/ws/radio/imeto_na_kanala
+            let wsUrl = `${serverBase.replace(/\/+$/, '')}/ws/radio/${encodeURIComponent(channel)}`;
+            
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer'; // ВАЖНО за получаване на аудио
+
+            ws.onopen = () => {
+                log("Свързан успешно към сървъра.");
+                setupBox.style.display = 'none';
+                radioContainer.style.display = 'flex';
+                statusText.innerText = `В КАНАЛ: ${channel}`;
+                setupPttControls();
+            };
+
+            ws.onmessage = async (event) => {
+                // Когато дойде съобщение от друг човек, го пускаме
+                try {
+                    let audioBlob = new Blob([event.data], { type: 'audio/webm' });
+                    let audioUrl = URL.createObjectURL(audioBlob);
+                    let audio = new Audio(audioUrl);
+                    audio.play();
+                } catch(e) { log("Грешка при възпроизвеждане: " + e); }
+            };
+
+            ws.onclose = () => {
+                log("Връзката прекъсна.");
+                disconnectRadio();
+                alert("Връзката със сървъра беше прекъсната.");
+            };
+
+            ws.onerror = (err) => {
+                log("Грешка в WebSocket връзката.");
+                btnConnect.innerText = "СВЪРЗВАНЕ";
+                btnConnect.disabled = false;
+            };
+        }
+
+        function disconnectRadio() {
+            if(ws) { ws.close(); ws = null; }
+            if(activeStream) { activeStream.getTracks().forEach(track => track.stop()); activeStream = null; }
+            setupBox.style.display = 'block';
+            radioContainer.style.display = 'none';
+            btnConnect.innerText = "СВЪРЗВАНЕ";
+            btnConnect.disabled = false;
+            log("Изключен от канала.");
+        }
+
+        function setupPttControls() {
+            // Махаме старите слушатели, за да не се дублират
+            btnPtt.replaceWith(btnPtt.cloneNode(true));
+            const newBtnPtt = document.getElementById('btn-ptt');
+
+            function startSpeaking(e) {
+                e.preventDefault();
+                if (isTalking || !ws || ws.readyState !== WebSocket.OPEN) return;
+                isTalking = true;
+                
+                newBtnPtt.classList.add('recording');
+                newBtnPtt.innerHTML = `<span style="font-size:40px; margin-bottom:10px;">🎙️</span>В ЕФИР СИ...`;
+                
+                audioChunks = [];
+                mediaRecorder = new MediaRecorder(activeStream, { mimeType: 'audio/webm' });
+                
+                mediaRecorder.ondataavailable = e => { 
+                    if (e.data.size > 0) audioChunks.push(e.data); 
+                };
+                
+                mediaRecorder.onstop = () => {
+                    if(audioChunks.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+                        let audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        ws.send(audioBlob); // Изпращаме записа
+                        log("Аудиото е изпратено.");
+                    }
+                };
+                
+                mediaRecorder.start();
+                log("Записва се...");
+            }
+
+            function stopSpeaking(e) {
+                e.preventDefault();
+                if (!isTalking) return;
+                isTalking = false;
+                
+                newBtnPtt.classList.remove('recording');
+                newBtnPtt.innerHTML = `<span style="font-size:40px; margin-bottom:10px;">🎤</span>ЗАДРЪЖ И<br>ГОВОРИ`;
+                
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+            }
+
+            newBtnPtt.addEventListener('pointerdown', startSpeaking);
+            newBtnPtt.addEventListener('pointerup', stopSpeaking);
+            newBtnPtt.addEventListener('pointerleave', stopSpeaking);
+        }
+    </script>
+</body>
+</html>
