@@ -168,12 +168,30 @@ test('празнина в дневника се брои за почивка', (
 
 // ── чл. 8(5): двойка
 
-test('двойка: 9 ч почивка в рамките на 30 ч е редовна; сам шофьор — нарушение', () => {
+test('двойка: 9 ч почивка в рамките на 30 ч е позволена; сам шофьор — нарушение', () => {
   const s = seq('2026-10-12T05:00Z', ['D', 270], ['R', 45], ['D', 270], ['R', 45], ['W', 450], ['R', 540], ['D', 10]);
   assert.ok(codes(run(s)).includes('DAILY_REST'));
   const m = run(s, { multiManning: true });
-  assert.equal(m.duties[0].rest.kind, 'multi');
+  assert.equal(m.duties[0].rest.kind, 'reduced');
   assert.deepEqual(codes(m), []);
+});
+
+test('двойка: 9 ч се брои към трите намалени, 11 ч е редовна', () => {
+  const day9 = [['D', 270], ['R', 45], ['D', 270], ['W', 600], ['R', 540]];
+  const four = run(seq('2026-10-12T05:00Z', ...day9, ...day9, ...day9, ...day9, ['D', 30]), { multiManning: true });
+  assert.deepEqual(codes(four), ['REDUCED_DAILY_RESTS']);
+  const day11 = [['D', 270], ['R', 45], ['D', 270], ['W', 300], ['R', 660]]; // цели 11 ч влизат в 30-те часа
+  const ok = run(seq('2026-10-12T05:00Z', ...day11, ...day11, ...day11, ...day11, ['D', 30]), { multiManning: true });
+  assert.deepEqual(ok.duties.slice(0, 4).map(d => d.rest.kind), ['regular', 'regular', 'regular', 'regular']);
+  assert.deepEqual(codes(ok), []);
+});
+
+test('двойка: без останали намалени почивки трябват 11 ч', () => {
+  const day9 = [['D', 270], ['R', 45], ['D', 270], ['W', 600], ['R', 540]];
+  const r = run(seq('2026-10-12T05:00Z', ...day9, ...day9, ...day9, ['D', 270], ['R', 45], ['D', 270], ['W', 600], ['R', 545]),
+    { multiManning: true });
+  assert.equal(r.status.driveRemaining, 0);
+  assert.equal(r.status.resumeAt, r.status.currentRest.since + 11 * H);
 });
 
 test('двойка: всеки водач има свой дневник и данните не се губят при смяна (старата грешка №4)', () => {
