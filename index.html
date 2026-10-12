@@ -203,11 +203,20 @@
             <span style="font-weight:bold; color:#4CAF50;">🌙 Тъмно зелено (Нощ)</span>
             <label class="switch"><input type="checkbox" onchange="document.body.classList.toggle('night-mode')"><span class="slider"></span></label>
         </div>
+        <div style="font-size:11px; color:#888; margin:12px 0 6px;">Над 90 км/ч: броене от 30 сек, преди тахографът да запише превишение</div>
+        <div class="menu-item">
+            <span style="font-weight:bold; color:#F44336;">🔊 Гласово предупреждение</span>
+            <label class="switch"><input type="checkbox" id="os-voice-toggle" checked onchange="setOverspeedOption('voice', this.checked)"><span class="slider"></span></label>
+        </div>
+        <div class="menu-item">
+            <span style="font-weight:bold; color:#F44336;">🚨 Аларма на екрана</span>
+            <label class="switch"><input type="checkbox" id="os-alarm-toggle" checked onchange="setOverspeedOption('alarm', this.checked)"><span class="slider"></span></label>
+        </div>
     </div>
 </div>
 
 <div id="overspeed-modal">
-    <div class="os-title">НАМАЛИ СКОРОСТТА!</div>
+    <div class="os-title" id="os-title">НАМАЛИ СКОРОСТТА!</div>
     <div class="os-speed" id="os-speed-display">91 км/ч</div>
     <div class="os-timer" id="os-timer">30</div>
     <div class="os-controls">
@@ -508,7 +517,7 @@ let uiConfigRest = { 'mod-rest-jokers': true, 'mod-rest-tacho': true, 'mod-rest-
 let globalScale = 1.0;
 
 let overspeedMutedUntil = 0; let muteUntilStop = false; let muteForToday = false;
-let osCounter = 30; let isOsActive = false;
+let osVoice = true, osAlarm = true, overspeedWatch = null, lastSpeedKmh = 0; // предупреждение за скорост (engine/overspeed.js)
 let warning4h15mShown = false; let isEngineOn = false; let lastMotionTime = Date.now(); let wakeLock = null;
 let shiftHistory = {};
 
@@ -631,6 +640,7 @@ function loadData() {
     lastWeeklyRestEnd = parseInt(localStorage.getItem('th_last_weekly_rest')) || Date.now();
     warn144_24h = localStorage.getItem('th_w144_24') === 'true'; warn144_12h = localStorage.getItem('th_w144_12') === 'true'; warn144_4h = localStorage.getItem('th_w144_4') === 'true';
     hasManualEntryToday = localStorage.getItem('th_manual_today') === 'true';
+    osVoice = localStorage.getItem('th_os_voice') !== 'false'; osAlarm = localStorage.getItem('th_os_alarm') !== 'false';
     
     let savedScale = parseFloat(localStorage.getItem('th_scale'));
     if(!isNaN(savedScale)) { globalScale = savedScale; document.documentElement.style.setProperty('--ui-scale', globalScale); document.getElementById('ui-scaler').value = globalScale; document.getElementById('scale-val-display').innerText = Math.round(globalScale*100) + "%"; }
@@ -675,12 +685,14 @@ function saveData() {
     localStorage.setItem('th_shift_active', isShiftActive); localStorage.setItem('th_shift_start', shiftStartedAt || '');
     localStorage.setItem('th_last_weekly_rest', lastWeeklyRestEnd); localStorage.setItem('th_manual_today', hasManualEntryToday);
     localStorage.setItem('th_w144_24', warn144_24h); localStorage.setItem('th_w144_12', warn144_12h); localStorage.setItem('th_w144_4', warn144_4h);
+    localStorage.setItem('th_os_voice', osVoice); localStorage.setItem('th_os_alarm', osAlarm);
     localStorage.setItem('th_history', JSON.stringify(shiftHistory)); 
 }
 
 window.onload = function() {
     loadData(); applyConfigVisuals();
     document.getElementById('gps-toggle').checked = gpsEnabled;
+    document.getElementById('os-voice-toggle').checked = osVoice; document.getElementById('os-alarm-toggle').checked = osAlarm;
     if(gpsEnabled) { startGPS(); setupDeviceFeatures(); } 
     buildCalendar(); updateJokerUI(); updateVisuals(); updateSpecialModeUI(); updateShiftButtonUI(); updateDistUI();
     setInterval(updateUI, 1000); 
@@ -982,7 +994,7 @@ function updateUI() {
         document.getElementById('rep-manual-flag').style.display = hasManualEntryToday ? 'block' : 'none';
     }
 
-    if (isOsActive) { osCounter--; if (osCounter <= 0) document.getElementById('os-timer').innerText = "0"; else document.getElementById('os-timer').innerText = osCounter; }
+    if (watchId) feedOverspeed(lastSpeedKmh); // броячът върви и между две обновявания на GPS
 }
 
 // ==================== СТАТЕ И GPS ====================
@@ -1032,21 +1044,16 @@ function startGPS() {
     if("geolocation" in navigator) {
         watchId = navigator.geolocation.watchPosition(
             async pos => {
-                let rawSpd = (pos.coords.speed || 0) * 3.6; let spd = rawSpd;
-                if (rawSpd > 45 && rawSpd <= 70) spd -= 1; else if (rawSpd > 70 && rawSpd <= 85) spd -= 2; else if (rawSpd > 85) spd -= 3;
-                spd = Math.round(spd * calibFactor); if (spd < 0) spd = 0;
+                // скорост по GPS с коефициента от калибрирането; без изваждане, за да не закъснява алармата
+                let rawSpd = Math.max(0, (pos.coords.speed || 0) * 3.6 * calibFactor);
+                let spd = Math.round(rawSpd);
                 document.getElementById('current-speed-text').innerHTML = spd;
                 
                 if (spd >= 5 && currentState !== 'drive' && !isOutMode) { if (!isShiftActive) handleShiftStart(true); setManualState('drive'); } 
                 else if (spd < 3 && isShiftActive && !isOutMode) { if (currentState === 'drive') setManualState('work'); }
                 
-                if(spd >= 91) {
-                    let now = Date.now();
-                    if (!muteForToday && !muteUntilStop && now > overspeedMutedUntil) {
-                        document.getElementById('os-speed-display').innerText = spd + " км/ч";
-                        if(!isOsActive) { isOsActive=true; osCounter=30; document.getElementById('overspeed-modal').style.display='flex'; }
-                    }
-                } else { if(isOsActive) { isOsActive=false; document.getElementById('overspeed-modal').style.display='none'; osCounter=30; } if(spd === 0) muteUntilStop = false; }
+                lastSpeedKmh = rawSpd; feedOverspeed(rawSpd);
+                if (spd === 0) muteUntilStop = false;
 
                 if (spd < 5 && Math.random() < 0.1) {
                     let loc = await fetchLocationData(pos.coords.latitude, pos.coords.longitude);
@@ -1061,9 +1068,68 @@ function startGPS() {
         );
     }
 }
-function stopGPS() { if(watchId) navigator.geolocation.clearWatch(watchId); watchId=null; lastLat=null; lastLon=null; document.getElementById('current-speed-text').innerHTML = '0'; }
+function stopGPS() { if(watchId) navigator.geolocation.clearWatch(watchId); watchId=null; lastLat=null; lastLon=null; lastSpeedKmh = 0; if (overspeedWatch) overspeedWatch.reset(); hideOverspeed(); document.getElementById('current-speed-text').innerHTML = '0'; }
 function toggleGPS(cb) { gpsEnabled = cb.checked; if(gpsEnabled){ setupDeviceFeatures(); startGPS(); } else stopGPS(); saveData(); }
-function muteOverspeed(type) { if (type === 5) overspeedMutedUntil = Date.now() + 5 * 60 * 1000; if (type === 'stop') muteUntilStop = true; if (type === 'today') muteForToday = true; isOsActive = false; document.getElementById('overspeed-modal').style.display = 'none'; osCounter = 30; }
+function muteOverspeed(type) { if (type === 5) overspeedMutedUntil = Date.now() + 5 * 60 * 1000; if (type === 'stop') muteUntilStop = true; if (type === 'today') muteForToday = true; hideOverspeed(); if ('speechSynthesis' in window) speechSynthesis.cancel(); }
+
+// ==================== СКОРОСТ НАД 90 КМ/Ч ====================
+// Тахографът записва превишение след повече от 60 сек над 90 км/ч.
+// Броячът на екрана тръгва от 30, гласът казва 30, 20, 10 и „записано“ 5 сек по-рано.
+function setOverspeedOption(kind, on) {
+    if (kind === 'voice') { osVoice = on; if (!on && 'speechSynthesis' in window) speechSynthesis.cancel(); }
+    if (kind === 'alarm') { osAlarm = on; if (!on) hideOverspeed(); }
+    saveData();
+}
+function osMuted() { return muteForToday || muteUntilStop || Date.now() < overspeedMutedUntil; }
+function hideOverspeed() {
+    document.getElementById('overspeed-modal').style.display = 'none';
+    document.getElementById('os-title').innerText = 'НАМАЛИ СКОРОСТТА!';
+}
+function feedOverspeed(kmh) {
+    if (!overspeedWatch && window.createOverspeedWatch) overspeedWatch = window.createOverspeedWatch();
+    if (!overspeedWatch) return;
+    for (const e of overspeedWatch.update(kmh, Date.now())) handleOverspeedEvent(e);
+}
+function speakBg(text) {
+    try {
+        if (!('speechSynthesis' in window)) return;
+        const u = new SpeechSynthesisUtterance(text); u.lang = 'bg-BG'; u.rate = 1.05;
+        const v = speechSynthesis.getVoices().find(x => (x.lang || '').toLowerCase().startsWith('bg'));
+        if (v) u.voice = v;
+        speechSynthesis.cancel(); speechSynthesis.speak(u);
+    } catch (e) {}
+}
+function handleOverspeedEvent(e) {
+    const quiet = osMuted();
+    if (e.type === 'tick') {
+        document.getElementById('os-timer').innerText = e.remaining;
+        document.getElementById('os-speed-display').innerText = Math.round(e.speed) + ' км/ч';
+        if (e.shown && osAlarm && !quiet) document.getElementById('overspeed-modal').style.display = 'flex';
+    } else if (e.type === 'say') {
+        if (osVoice && !quiet) speakBg(e.text);
+        if (osAlarm && !quiet) {
+            if (navigator.vibrate) navigator.vibrate(400);
+            if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted') {
+                try { new Notification('Скорост над 90 км/ч', { body: e.text }); } catch (err) {}
+            }
+        }
+    } else if (e.type === 'zero') {
+        document.getElementById('os-title').innerText = 'ЗАПИСАНО В ТАХОГРАФА';
+    } else if (e.type === 'end') {
+        hideOverspeed();
+        if (e.recorded) logOverspeed(e);
+    }
+}
+// превишенията над 60 сек се пазят за отчета на смяната
+function logOverspeed(e) {
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem('th_overspeeds')) || []; } catch (err) {}
+    list.push({ start: e.start, duration: e.duration, maxSpeed: Math.round(e.maxSpeed) });
+    try { localStorage.setItem('th_overspeeds', JSON.stringify(list.slice(-200))); } catch (err) {}
+}
+function overspeedsSince(t) {
+    try { return (JSON.parse(localStorage.getItem('th_overspeeds')) || []).filter(x => x.start >= t); } catch (err) { return []; }
+}
 
 // ==================== ДОПЪЛНИТЕЛНИ МОДАЛИ ====================
 function openCalib() { document.getElementById('calib-modal').style.display = 'flex'; }
@@ -1122,6 +1188,8 @@ function archiveCurrentShift() {
     if(shiftSecs > shiftLimit * 3600) violations.push({txt: `Превишена работна смяна (>${shiftLimit}ч)`, fine: "Глоба: ~100€ до 250€"});
     if(baseWeeklyDrive > 56 * 3600) violations.push({txt: "Превишени 56 часа за седмица", fine: "Глоба: ~250€ до 1000€"});
     if(baseBiWeeklyDrive > 90 * 3600) violations.push({txt: "Превишени 90 часа за 2 седмици", fine: "Глоба: ~250€ до 1000€"});
+    let os = overspeedsSince(startObj.getTime());
+    if(os.length) violations.push({txt: `Скорост над 90 км/ч за над 1 мин: ${os.length} ${os.length === 1 ? 'път' : 'пъти'} (макс. ${Math.max(...os.map(x => x.maxSpeed))} км/ч)`, fine: "Записано в тахографа като събитие"});
     
     if(baseDailyDrive > DAILY_STD) { jokers['10h']--; if(jokers['10h']<0) jokers['10h']=0; }
     if(shiftSecs > 13*3600 && !isCrewMode && !isNightShift) { jokers['15h']--; if(jokers['15h']<0) jokers['15h']=0; }
@@ -1351,6 +1419,11 @@ function setupMainPttControls() {
     newPtt.addEventListener('pointerup', stopSpeaking);
     newPtt.addEventListener('pointerleave', stopSpeaking);
 }
+</script>
+<script type="module">
+// модулът за скоростта (engine/overspeed.js) се зарежда отделно и се подава на приложението
+import { createOverspeedWatch } from './engine/overspeed.js';
+window.createOverspeedWatch = createOverspeedWatch;
 </script>
 </body>
 </html>
