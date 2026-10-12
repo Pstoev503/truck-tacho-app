@@ -47,7 +47,7 @@ const DEFAULTS = {
   international: false,             // международен превоз: две поредни намалени седмични почивки са позволени (чл. 8(6))
   availabilityCountsAsBreak: false, // „на разположение“ като пауза по чл. 7 (никога като дневна или седмична почивка)
   gapsAsRest: true,                 // празнините в дневника се броят за почивка и се отбелязват
-  weekOffsetMinutes: 0,             // седмицата е пон 00:00 – нед 24:00; тахографът брои в UTC
+  weekOffsetMinutes: 0,             // седмицата е пон 00:00 – нед 24:00 по UTC, както брои тахографът
   lastRestEnd: undefined,           // край на последната дневна почивка преди дневника
   lastWeeklyRestEnd: undefined,     // край на последната седмична почивка преди дневника
   lastWeeklyRestReduced: false,     // дали тя е била намалена
@@ -281,9 +281,10 @@ export function analyze(activities, options = {}) {
     if (L >= LIMITS.dailyRestReduced) {
       const winEnd = cur.start + window;
       const inWindow = g.parts.reduce((t, [s, e]) => t + overlap(s, e, cur.start, winEnd), 0);
+      // при двойка прозорецът е 30 ч, но класификацията е същата: 9 ч е намалена
+      // и се брои към трите, 11 ч или 3 + 9 ч е редовна (DVSA, виж README)
       let kind;
-      if (o.multiManning) kind = inWindow >= LIMITS.dailyRestReduced ? 'multi' : 'insufficient';
-      else if (inWindow >= LIMITS.dailyRestRegular) kind = 'regular';
+      if (inWindow >= LIMITS.dailyRestRegular) kind = 'regular';
       else if (cur.split3 && cur.split3.s < winEnd && inWindow >= LIMITS.dailyRestReduced) kind = 'split';
       else if (inWindow >= LIMITS.dailyRestReduced) kind = 'reduced';
       else kind = 'insufficient';
@@ -422,7 +423,7 @@ function buildStatus(x) {
     else if (restDuty.rest.kind === 'reduced') reducedBefore -= 1;
   }
   const reducedLeft = Math.max(0, LIMITS.reducedDailyRestsMax - reducedBefore);
-  const needDaily = d => (o.multiManning || (d && d.split3) || reducedLeft > 0 ? LIMITS.dailyRestReduced : LIMITS.dailyRestRegular);
+  const needDaily = d => ((d && d.split3) || reducedLeft > 0 ? LIMITS.dailyRestReduced : LIMITS.dailyRestRegular);
 
   // седмична почивка: ако предишната е била намалена, тази трябва да е 45 ч
   const ongoingWeekly = weeklyRests.find(r => r.ongoing);
@@ -500,7 +501,6 @@ function buildStatus(x) {
       ? [[LIMITS.breakSplitSecond, 'втората част от паузата (30 мин)']]
       : [[LIMITS.breakSplitFirst, 'първата част от паузата (15 мин)'], [LIMITS.breakFull, 'пауза 45 мин']];
     if (ctxDuty?.split3) steps.push([LIMITS.dailyRestReduced, 'дневна почивка (3 + 9 ч)']);
-    else if (o.multiManning) steps.push([LIMITS.dailyRestReduced, 'дневна почивка при двойка (9 ч)']);
     else {
       // „първа част от разделена почивка“ има смисъл само докато почивката е под 9 ч
       steps.push([LIMITS.splitRestFirst, 'първата част от разделена дневна почивка (3 ч)', LIMITS.dailyRestReduced]);
