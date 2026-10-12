@@ -212,6 +212,16 @@
             <span style="font-weight:bold; color:#F44336;">🚨 Аларма на екрана</span>
             <label class="switch"><input type="checkbox" id="os-alarm-toggle" checked onchange="setOverspeedOption('alarm', this.checked)"><span class="slider"></span></label>
         </div>
+        <div style="font-size:11px; color:#888; margin:12px 0 6px;">Броячи по Регламент 561/2006</div>
+        <div class="menu-item">
+            <span style="font-weight:bold; color:#4CAF50;">🔊 Глас за паузи и почивки</span>
+            <label class="switch"><input type="checkbox" id="rules-voice-toggle" checked onchange="setRulesVoice(this.checked)"><span class="slider"></span></label>
+        </div>
+        <div class="menu-item" style="flex-direction:column; align-items:stretch; gap:4px;">
+            <span style="font-weight:bold; color:#FF9800;">Край на последната седмична почивка</span>
+            <input type="datetime-local" id="input-weekly-rest-end" class="calib-input" style="margin:0; font-size:15px;" onchange="setWeeklyRestEnd(this.value)">
+            <span style="font-size:10px; color:#888;">Попълни веднъж, докато приложението е ново. Иначе срокът за 144-те часа е „най-късно“.</span>
+        </div>
     </div>
 </div>
 
@@ -253,8 +263,11 @@
     <div class="calib-card" style="border-color:#311b92;">
         <h3 style="color:#651fff; margin-top:0;">Ръчно Въвеждане</h3>
         <div style="font-size:11px; color:#aaa; margin-bottom:10px;">*Ще бъде маркирано като [ВЪВЕДЕНО РЪЧНО] в отчета.</div>
-        <input type="number" id="input-man-drive" class="calib-input" placeholder="Добави Каране (Минути)">
-        <input type="number" id="input-man-work" class="calib-input" placeholder="Добави Работа (Минути)">
+        <select id="input-man-type" class="calib-input"><option value="drive">🚚 Каране</option><option value="work">🔨 Работа</option><option value="avail">⌛ Готовност</option><option value="rest">☕ Почивка</option></select>
+        <div style="font-size:11px; color:#aaa; text-align:left;">От</div>
+        <input type="datetime-local" id="input-man-from" class="calib-input" style="margin-top:2px; font-size:16px;">
+        <div style="font-size:11px; color:#aaa; text-align:left;">До</div>
+        <input type="datetime-local" id="input-man-to" class="calib-input" style="margin-top:2px; font-size:16px;">
         <div style="display:flex; gap:10px; margin-top:10px;"><button class="os-btn" style="flex:1; border-color:#4CAF50; color:#4CAF50;" onclick="applyManualEntry()">ДОБАВИ</button><button class="os-btn" style="flex:1;" onclick="closeManualModal()">ОТКАЗ</button></div>
     </div>
 </div>
@@ -292,9 +305,15 @@
                 <div class="label" id="tacho-label">Оставащо Каране</div>
                 <div class="time-big" id="main-timer-text" onclick="toggleTimerMode(event)">04:30</div>
                 <div class="label" id="timer-status" style="margin-top:2px; color:#4CAF50; font-weight:bold;">РЪЧЕН РЕЖИМ</div>
+                <div class="label" id="tacho-next" style="margin-top:2px; font-size:10px; color:#aaa; text-transform:none;"></div>
             </div>
         </div>
         
+        <div id="mod-ask" style="width:94%; text-align:center; margin:2px auto 8px;">
+            <button onclick="askHowMuchLeft()" style="background:#111; border:2px solid #4CAF50; color:#fff; border-radius:12px; padding:10px 14px; font-size:15px; font-weight:bold; width:100%; cursor:pointer;">🔊 Колко ми остава?</button>
+            <div id="tacho-answer" style="display:none; margin-top:6px; padding:8px 10px; border-left:4px solid #4CAF50; background:#111; color:#ddd; font-size:13px; line-height:1.35; border-radius:6px; text-align:left;"></div>
+        </div>
+
         <div class="info-box" id="mod-radio" style="border-left: 4px solid #00BCD4; margin-bottom: 10px; text-align:center;">
             <div style="color:#00BCD4; font-weight:bold; margin-bottom:10px;">📻 ГЛОБАЛНА СТАНЦИЯ</div>
             <div style="display:flex; gap:10px; margin-bottom:10px;">
@@ -488,6 +507,14 @@ let lastWeeklyRestEnd = Date.now();
 let warn144_24h = false, warn144_12h = false, warn144_4h = false;
 let isTimerElapsed = false;
 
+// Броячи по Регламент 561/2006: всичко се смята от дневника на дейностите (папка engine/)
+let activityLog = [];            // [{ type, start, end }] — engine/activity-log.js
+let lastResult = null;           // последният резултат от броячите
+let rulesVoice = true;           // глас за паузи и почивки
+let weeklyRestEndInput = null;   // въведен на ръка край на последната седмична почивка
+let shownWarnings = {};          // код на предупреждение → кога е показано
+const H_MS = 3600000;
+
 // Настройки
 let gpsEnabled = false, isCrewMode = false, currentDriver = 1, isOutMode = false, isFerryMode = false, isShiftActive = false;
 let jokers = { '10h': 2, '15h': 2, '9h': 3 };
@@ -498,12 +525,12 @@ let currentCountryCode = ""; let hasManualEntryToday = false;
 
 // ДИНАМИЧНО ТАБЛО CONFIG - КАРАНЕ
 const modNames = {
-    'mod-jokers': 'Жокери (Горе)', 'mod-start-btns': 'Старт Бутони', 'mod-tacho': 'Главен Тахограф', 'mod-radio': 'Глобално Радио', 'mod-daily': 'Дневно Каране',
+    'mod-jokers': 'Жокери (Горе)', 'mod-start-btns': 'Старт Бутони', 'mod-tacho': 'Главен Тахограф', 'mod-ask': 'Колко ми остава', 'mod-radio': 'Глобално Радио', 'mod-daily': 'Дневно Каране',
     'mod-shift': 'Работна Смяна', 'mod-speed': 'Скорост и Пробег', 'mod-special': 'Специални Режими', 'mod-weekly': 'Седмични Лимити', 'mod-calendar': 'Календар'
 };
-let defaultOrder = ['mod-jokers', 'mod-start-btns', 'mod-tacho', 'mod-radio', 'mod-daily', 'mod-shift', 'mod-speed', 'mod-special', 'mod-weekly', 'mod-calendar'];
+let defaultOrder = ['mod-jokers', 'mod-start-btns', 'mod-tacho', 'mod-ask', 'mod-radio', 'mod-daily', 'mod-shift', 'mod-speed', 'mod-special', 'mod-weekly', 'mod-calendar'];
 let uiOrder = [];
-let uiConfig = { 'mod-jokers': true, 'mod-start-btns': true, 'mod-tacho': true, 'mod-radio': true, 'mod-daily': true, 'mod-shift': true, 'mod-speed': true, 'mod-special': true, 'mod-weekly': true, 'mod-calendar': true };
+let uiConfig = { 'mod-jokers': true, 'mod-start-btns': true, 'mod-tacho': true, 'mod-ask': true, 'mod-radio': true, 'mod-daily': true, 'mod-shift': true, 'mod-speed': true, 'mod-special': true, 'mod-weekly': true, 'mod-calendar': true };
 
 // ДИНАМИЧНО ТАБЛО CONFIG - ПОЧИВКИ
 const modNamesRest = {
@@ -648,7 +675,8 @@ function loadData() {
     let savedOrder = localStorage.getItem('th_uiorder'); 
     if(savedOrder) {
         let parsedOrder = JSON.parse(savedOrder);
-        defaultOrder.forEach(id => { if(!parsedOrder.includes(id)) parsedOrder.push(id); });
+        // нов модул влиза след съседа си от подредбата по подразбиране
+        defaultOrder.forEach((id, i) => { if(!parsedOrder.includes(id)) { let at = parsedOrder.indexOf(defaultOrder[i-1]); parsedOrder.splice(at < 0 ? parsedOrder.length : at + 1, 0, id); } });
         uiOrder = parsedOrder;
     } else {
         uiOrder = [...defaultOrder];
@@ -662,20 +690,26 @@ function loadData() {
     let savedOrderRest = localStorage.getItem('th_uiorder_rest'); if(savedOrderRest) uiOrderRest = JSON.parse(savedOrderRest); else uiOrderRest = [...defaultOrderRest];
     let savedCfgRest = localStorage.getItem('th_uicfg_rest'); if(savedCfgRest) uiConfigRest = JSON.parse(savedCfgRest);
 
-    let lastWeek = localStorage.getItem('th_last_week'); let currentWeek = getWeekNumber(new Date());
-    if(lastWeek && currentWeek != lastWeek) { jokers['10h'] = 2; jokers['15h'] = 2; jokers['9h'] = 3; baseWeeklyDrive = 0; } 
-    else { jokers = JSON.parse(localStorage.getItem('th_jokers')) || jokers; baseWeeklyDrive = parseInt(localStorage.getItem('th_weekly_drive')) || 0; }
-    localStorage.setItem('th_last_week', currentWeek);
-    
-    baseDailyDrive = parseInt(localStorage.getItem('th_daily_drive')) || 0; baseBiWeeklyDrive = parseInt(localStorage.getItem('th_biweekly_drive')) || 0; baseWorkTime = parseInt(localStorage.getItem('th_work_time')) || 0;
     courseDistance = parseFloat(localStorage.getItem('th_course_dist')) || 0.0; shiftDistance = parseFloat(localStorage.getItem('th_shift_dist')) || 0.0; calibFactor = parseFloat(localStorage.getItem('th_calib')) || 1.0;
-    
-    currentState = 'rest'; modeStartTime = Date.now(); baseRestTime = 0; baseDriveTime = 0;
+    rulesVoice = localStorage.getItem('th_rules_voice') !== 'false';
+    weeklyRestEndInput = parseInt(localStorage.getItem('th_weekly_rest_end')) || null;
+    try { shownWarnings = JSON.parse(localStorage.getItem('th_warn_shown')) || {}; } catch (e) { shownWarnings = {}; }
+
+    // дневникът на дейностите: текущата дейност продължава и след презареждане
+    activityLog = window.tachoLog ? tachoLog.prune(tachoLog.parse(localStorage.getItem('th_activities') || '[]')) : [];
+    syncStateFromLog();
+}
+
+// текущата дейност и кога е започнала идват от дневника
+function syncStateFromLog() {
+    const cur = window.tachoLog ? tachoLog.current(activityLog) : null;
+    if (cur) { currentState = cur.type; modeStartTime = cur.start; if (cur.type === 'rest') isFerryMode = !!cur.ferry; }
+    else { currentState = 'rest'; modeStartTime = Date.now(); }
 }
 
 function saveData() {
-    localStorage.setItem('th_daily_drive', baseDailyDrive); localStorage.setItem('th_weekly_drive', baseWeeklyDrive);
-    localStorage.setItem('th_biweekly_drive', baseBiWeeklyDrive); localStorage.setItem('th_work_time', baseWorkTime);
+    localStorage.setItem('th_activities', JSON.stringify(activityLog)); localStorage.setItem('th_calib', calibFactor);
+    localStorage.setItem('th_rules_voice', rulesVoice); localStorage.setItem('th_weekly_rest_end', weeklyRestEndInput || '');
     localStorage.setItem('th_course_dist', courseDistance); localStorage.setItem('th_shift_dist', shiftDistance);
     localStorage.setItem('th_jokers', JSON.stringify(jokers)); 
     localStorage.setItem('th_uicfg', JSON.stringify(uiConfig)); localStorage.setItem('th_uiorder', JSON.stringify(uiOrder));
@@ -690,12 +724,16 @@ function saveData() {
 }
 
 window.onload = function() {
+    if (!window.tachoEngine || !window.tachoLog) alert('Броячите не се заредиха. Обнови страницата, когато има интернет.');
     loadData(); applyConfigVisuals();
     document.getElementById('gps-toggle').checked = gpsEnabled;
     document.getElementById('os-voice-toggle').checked = osVoice; document.getElementById('os-alarm-toggle').checked = osAlarm;
+    document.getElementById('rules-voice-toggle').checked = rulesVoice;
+    if (weeklyRestEndInput) document.getElementById('input-weekly-rest-end').value = toLocalInput(weeklyRestEndInput);
+    document.getElementById('btn-mode-ferry').classList.toggle('active', isFerryMode);
     if(gpsEnabled) { startGPS(); setupDeviceFeatures(); } 
     buildCalendar(); updateJokerUI(); updateVisuals(); updateSpecialModeUI(); updateShiftButtonUI(); updateDistUI();
-    setInterval(updateUI, 1000); 
+    updateUI(); setInterval(updateUI, 1000); 
 };
 
 
@@ -833,10 +871,11 @@ class TachoGen2Connector {
 }
 
 let tachoInstance = null;
+// Тахографът (DTCO 4.1 и по-нови) говори по класически Bluetooth (SPP, Регламент 2016/799,
+// Допълнение 13), а браузърът може само BLE. Връзката ще е в Android приложението
+// (папка android-sonda/ — тестова версия). Старият код по-горе остава само за справка.
 async function connectTachoBLE() {
-    if (!navigator.bluetooth) { alert("Този браузър не поддържа Bluetooth!"); return; }
-    tachoInstance = new TachoGen2Connector();
-    await tachoInstance.connect();
+    showWarningModal("Връзката с тахографа не може да стане от браузъра — тахографът ползва класически Bluetooth. Ще е в Android приложението, което в момента се тества (Тахо сонда).");
 }
 
 
@@ -925,61 +964,88 @@ function toggleTimerMode(e) { e.stopPropagation(); isTimerElapsed = !isTimerElap
 function liveSyncShiftData() {
     if(!isShiftActive || !shiftStartedAt) return;
     let startObj = new Date(shiftStartedAt); let dateStr = startObj.toDateString();
-    
+    const t = shiftTotals(Date.now());
     if(!shiftHistory[dateStr]) shiftHistory[dateStr] = {};
-    shiftHistory[dateStr].start = startObj.getHours().toString().padStart(2,'0')+":"+startObj.getMinutes().toString().padStart(2,'0');
+    shiftHistory[dateStr].start = fmtHour(startObj);
     shiftHistory[dateStr].locStart = startLocation;
-    shiftHistory[dateStr].drive = baseDailyDrive;
-    shiftHistory[dateStr].work = baseWorkTime;
+    shiftHistory[dateStr].drive = Math.floor(t.drive / 1000);
+    shiftHistory[dateStr].work = Math.floor((t.drive + t.work) / 1000);
     shiftHistory[dateStr].dist = shiftDistance;
-    shiftHistory[dateStr].manual = hasManualEntryToday;
+    shiftHistory[dateStr].manual = hasManualEntryToday || t.manual;
+}
+
+// каране и работа от началото на смяната (по дневника)
+function shiftTotals(now) {
+    if (!window.tachoLog || !shiftStartedAt) return { drive: 0, work: 0, avail: 0, rest: 0, manual: false };
+    return tachoLog.totals(activityLog, new Date(shiftStartedAt).getTime(), now);
+}
+
+// резултатът от броячите (engine/tacho-rules.js) за момента now
+function engineResult(now = Date.now()) {
+    if (!window.tachoEngine) return null;
+    const opts = { now, multiManning: isCrewMode, timeZone: 'Europe/Sofia' };
+    if (weeklyRestEndInput) opts.lastWeeklyRestEnd = weeklyRestEndInput;
+    try { return tachoEngine.analyze(activityLog, opts); } catch (e) { console.error('Броячи:', e); return null; }
+}
+
+const NEXT_STEP = {
+    break: st => 'пауза ' + Math.round(st.continuous.nextBreak / 60000) + ' мин',
+    daily: () => 'дневна почивка', dailyRest: () => 'дневна почивка',
+    weekly: () => 'край на 56-те ч', fortnight: () => 'край на 90-те ч', weeklyRest: () => 'седмична почивка'
+};
+// краткият ред под големия часовник: какво следва
+function nextStepText(st) {
+    if (st.driveRemaining > 0) return 'после: ' + (NEXT_STEP[st.binding] ? NEXT_STEP[st.binding](st) : '');
+    if (st.resumeAt) return 'тръгваш ' + (st.resumeAt - st.now > 20 * H_MS ? tachoEngine.clock(st.resumeAt) : 'в ' + fmtHour(new Date(st.resumeAt)));
+    return NEXT_STEP[st.binding] ? 'сега: ' + NEXT_STEP[st.binding](st) : '';
 }
 
 function updateUI() {
-    let now = Date.now(); let sessionSecs = Math.floor((now - modeStartTime) / 1000);
-    let cDailyDrive = baseDailyDrive; let cWeeklyDrive = baseWeeklyDrive; let cBiWeeklyDrive = baseBiWeeklyDrive; let cRestTime = baseRestTime; let cDriveTime = baseDriveTime; let cWorkTime = baseWorkTime;
+    const now = Date.now();
+    const R = engineResult(now);
+    lastResult = R;
+    if (!R) return;
+    const st = R.status, d = st.daily, w = st.weekly;
+    const s = ms => Math.floor(Math.max(0, ms) / 1000);
+    const driveLeft = s(st.driveRemaining);
 
-    if(!isOutMode) {
-        if(currentState === 'drive') { cDailyDrive += sessionSecs; cWeeklyDrive += sessionSecs; cBiWeeklyDrive += sessionSecs; cDriveTime += sessionSecs; cWorkTime += sessionSecs; }
-        else if(currentState === 'work') { cWorkTime += sessionSecs; }
-        else if(currentState === 'rest') { cRestTime += sessionSecs; }
-    } else { if(currentState === 'rest') { cRestTime += sessionSecs; } else if (currentState === 'work') { cWorkTime += sessionSecs; } }
-
-    let driveLeft = Math.max(0, MAX_DRIVE - cDriveTime);
-    if (cDriveTime >= 15300 && !warning4h15mShown) { showWarningModal("Остават 15 минути до задължителна пауза от 45 мин!"); warning4h15mShown = true; }
-
-    let timeSinceLastRest = Math.floor((now - lastWeeklyRestEnd) / 1000); let timeTo144 = Math.max(0, (144 * 3600) - timeSinceLastRest);
-    if (timeTo144 <= 24*3600 && timeTo144 > 0 && !warn144_24h) { showWarningModal("Остават 24 ЧАСА до задължителна СЕДМИЧНА ПАУЗА!"); warn144_24h = true; saveData(); }
-    if (timeTo144 <= 12*3600 && timeTo144 > 0 && !warn144_12h) { showWarningModal("Остават 12 ЧАСА до задължителна СЕДМИЧНА ПАУЗА!"); warn144_12h = true; saveData(); }
-    if (timeTo144 <= 4*3600  && timeTo144 > 0 && !warn144_4h)  { showWarningModal("КРИТИЧНО: Само 4 ЧАСА до задължителна СЕДМИЧНА ПАУЗА!"); warn144_4h = true; saveData(); }
-
-    if(isTimerElapsed) { document.getElementById('tacho-label').innerText = "Изтекло Каране"; document.getElementById('tacho-label').style.color = "#FF9800"; document.getElementById('main-timer-text').innerText = fmtSecs(cDriveTime); } 
+    if(isTimerElapsed) { document.getElementById('tacho-label').innerText = "Изтекло Каране"; document.getElementById('tacho-label').style.color = "#FF9800"; document.getElementById('main-timer-text').innerText = fmtSecs(s(st.continuous.driven)); } 
     else { document.getElementById('tacho-label').innerText = "Оставащо Каране"; document.getElementById('tacho-label').style.color = "#888"; document.getElementById('main-timer-text').innerText = fmtSecs(driveLeft); }
+    document.getElementById('tacho-next').innerText = nextStepText(st);
 
-    let pct = driveLeft / MAX_DRIVE; let ring = document.getElementById('tacho-ring-main');
+    let pct = Math.min(1, st.driveRemaining / (MAX_DRIVE * 1000)); let ring = document.getElementById('tacho-ring-main');
     ring.style.strokeDashoffset = 600 - (pct * 600); ring.style.stroke = pct > 0.15 ? "#4CAF50" : (pct > 0.05 ? "#FF9800" : "#F44336");
     if(currentState==='drive') ring.style.filter = "drop-shadow(0 0 8px " + ring.style.stroke + ")"; else ring.style.filter = "none";
     document.getElementById('main-view').classList.toggle('alarm-active', currentState === 'drive' && driveLeft < 2700 && driveLeft > 0);
-    
-    let dailyLimit = (jokers['10h'] > 0 || (jokers['10h'] === 0 && cDailyDrive > DAILY_STD)) ? DAILY_TEN : DAILY_STD;
-    document.getElementById('daily-limit-display').innerText = fmtSecs(dailyLimit);
-    document.getElementById('daily-driven-text').innerText = fmtSecs(cDailyDrive);
-    document.getElementById('daily-progress').style.width = Math.min((cDailyDrive / dailyLimit) * 100, 100) + "%";
-    
-    document.getElementById('weekly-text').innerText = Math.floor(cWeeklyDrive / 3600) + ":" + Math.floor((cWeeklyDrive % 3600) / 60).toString().padStart(2, '0');
-    document.getElementById('weekly-progress').style.width = Math.min((cWeeklyDrive / WEEKLY_MAX) * 100, 100) + "%";
-    document.getElementById('biweekly-text').innerText = Math.floor(cBiWeeklyDrive / 3600) + ":" + Math.floor((cBiWeeklyDrive % 3600) / 60).toString().padStart(2, '0');
-    document.getElementById('biweekly-progress').style.width = Math.min((cBiWeeklyDrive / BIWEEKLY_MAX) * 100, 100) + "%";
 
-    updateShiftUI(now, dailyLimit);
+    document.getElementById('daily-limit-display').innerText = fmtSecs(s(d.limit));
+    document.getElementById('daily-driven-text').innerText = fmtSecs(s(d.driven));
+    document.getElementById('daily-progress').style.width = Math.min((d.driven / d.limit) * 100, 100) + "%";
+
+    const both = w.previousWeek + w.driven;
+    document.getElementById('weekly-text').innerText = fmtSecsShort(s(w.driven));
+    document.getElementById('weekly-progress').style.width = Math.min((w.driven / (WEEKLY_MAX * 1000)) * 100, 100) + "%";
+    document.getElementById('biweekly-text').innerText = fmtSecsShort(s(both));
+    document.getElementById('biweekly-progress').style.width = Math.min((both / (BIWEEKLY_MAX * 1000)) * 100, 100) + "%";
+
+    // „жокерите“ идват от броячите: удължения до 10 ч и намалени дневни почивки (9 ч, смяна до 15 ч)
+    jokers['10h'] = d.extensionsLeft; jokers['15h'] = d.reducedRestsLeft; jokers['9h'] = d.reducedRestsLeft;
+    updateJokerUI();
+    updateShiftUI(now, st);
 
     if(currentView === 'rest') {
-        document.getElementById('rest-timer-text').innerText = fmtSecs(cRestTime);
-        updateRestFillableLabels(cRestTime);
-        document.getElementById('hint-split').style.display = (cRestTime > 900 && cRestTime < 1800) ? 'block' : 'none';
-        document.getElementById('time-to-144h').innerText = Math.floor(timeTo144 / 3600) + "ч " + Math.floor((timeTo144 % 3600) / 60) + "м";
-        document.getElementById('time-to-144h').style.color = timeTo144 < (12 * 3600) ? "#F44336" : "#fff";
+        const r = st.currentRest, rSecs = r ? s(r.length) : 0;
+        document.getElementById('rest-timer-text').innerText = fmtSecs(rSecs);
+        updateRestFillableLabels(rSecs, r ? r.since : now);
+        document.getElementById('hint-split').style.display = (rSecs > 900 && rSecs < 1800) ? 'block' : 'none';
+        const wr = st.weeklyRest, el = document.getElementById('time-to-144h');
+        if (wr.onWeeklyRest) { el.innerText = 'в седмична почивка'; el.style.color = '#4CAF50'; }
+        else if (wr.deadline == null) { el.innerText = '--:--'; el.style.color = '#fff'; }
+        else if (wr.remaining <= 0) { el.innerText = 'закъснява!'; el.style.color = '#F44336'; }
+        else { const left = s(wr.remaining); el.innerText = Math.floor(left / 3600) + "ч " + Math.floor((left % 3600) / 60) + "м" + (wr.estimated ? ' (най-късно)' : ''); el.style.color = left < 12 * 3600 ? "#F44336" : "#fff"; }
     }
+
+    handleRuleWarnings(st.warnings, now);
 
     if(isShiftActive && now % 5000 < 1000) {
         liveSyncShiftData();
@@ -987,29 +1053,70 @@ function updateUI() {
     }
 
     if (currentView === 'report' && currentReportDate === new Date().toDateString() && isShiftActive) {
+        const t = shiftTotals(now);
         document.getElementById('rep-status').innerText = "Отворена смяна (Реално време)"; document.getElementById('rep-status').style.color = "#FFEB3B";
-        document.getElementById('rep-drive').innerText = fmtSecsShort(cDailyDrive) + " ч."; document.getElementById('rep-work').innerText = fmtSecsShort(cWorkTime) + " ч.";
+        document.getElementById('rep-drive').innerText = fmtSecsShort(s(t.drive)) + " ч."; document.getElementById('rep-work').innerText = fmtSecsShort(s(t.drive + t.work)) + " ч.";
         document.getElementById('rep-dist').innerText = shiftDistance.toFixed(1) + " км";
         let sDiff = Math.floor((now - new Date(shiftStartedAt)) / 1000); document.getElementById('rep-length').innerText = fmtSecsShort(sDiff) + " ч.";
-        document.getElementById('rep-manual-flag').style.display = hasManualEntryToday ? 'block' : 'none';
+        document.getElementById('rep-manual-flag').style.display = (hasManualEntryToday || t.manual) ? 'block' : 'none';
     }
 
     if (watchId) feedOverspeed(lastSpeedKmh); // броячът върви и между две обновявания на GPS
 }
 
+// предупрежденията от броячите: всяко се показва и казва веднъж, докато е в сила
+function handleRuleWarnings(list, now) {
+    const active = {}, fresh = [];
+    for (const w of list) {
+        active[w.code] = shownWarnings[w.code] || now;
+        if (!shownWarnings[w.code]) fresh.push(w.message);
+    }
+    if (fresh.length) {
+        // няколко нови наведнъж се показват и казват заедно
+        showWarningModal(fresh.join('\n'));
+        if (rulesVoice) speakBg(fresh.join('. '));
+        // вибрацията работи само след първото докосване на екрана
+        if (navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) navigator.vibrate([300, 150, 300]);
+        if (document.visibilityState !== 'visible' && 'Notification' in window && Notification.permission === 'granted') {
+            try { new Notification('Почивки и каране', { body: fresh.join('\n') }); } catch (e) {}
+        }
+    }
+    if (fresh.length || Object.keys(active).length !== Object.keys(shownWarnings).length) {
+        shownWarnings = active;
+        try { localStorage.setItem('th_warn_shown', JSON.stringify(shownWarnings)); } catch (e) {}
+    }
+}
+
+// „Колко ми остава?“ — изречението от броячите, на екрана и на глас
+function askHowMuchLeft() {
+    const box = document.getElementById('tacho-answer');
+    const R = engineResult();
+    if (!R) { box.innerText = 'Броячите не са заредени.'; box.style.display = 'block'; return; }
+    const text = tachoEngine.describe(R, { timeZone: 'Europe/Sofia' });
+    box.innerText = text; box.style.display = 'block';
+    speakBg(text);
+    clearTimeout(askHowMuchLeft.timer);
+    askHowMuchLeft.timer = setTimeout(() => { box.style.display = 'none'; }, 30000);
+}
+
+function setRulesVoice(on) { rulesVoice = on; if (!on && 'speechSynthesis' in window) speechSynthesis.cancel(); saveData(); }
+function setWeeklyRestEnd(v) {
+    const t = v ? new Date(v).getTime() : NaN;
+    weeklyRestEndInput = Number.isFinite(t) && t <= Date.now() ? t : null;
+    saveData(); updateUI();
+}
+function toLocalInput(ms) { const d = new Date(ms), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
+
 // ==================== СТАТЕ И GPS ====================
 function setManualState(newState) {
     if(currentState === newState) return;
     if(isOutMode && newState === 'drive') return; 
-    let now = Date.now(); let sessionSecs = Math.floor((now - modeStartTime) / 1000);
-    if(!isOutMode) {
-        if(currentState === 'drive') { baseDailyDrive += sessionSecs; baseWeeklyDrive += sessionSecs; baseBiWeeklyDrive += sessionSecs; baseDriveTime += sessionSecs; baseWorkTime += sessionSecs; }
-        else if(currentState === 'work') { baseWorkTime += sessionSecs; }
-        else if(currentState === 'rest') { baseRestTime += sessionSecs; if(baseRestTime >= 2700 && !isFerryMode) { baseDriveTime = 0; warning4h15mShown = false; } if(baseRestTime >= 24 * 3600) { lastWeeklyRestEnd = now; warn144_24h=false; warn144_12h=false; warn144_4h=false; } }
-    } else { if(currentState === 'rest') baseRestTime += sessionSecs; else if (currentState === 'work') baseWorkTime += sessionSecs; }
-    
-    if(currentState === 'rest' && baseRestTime >= 9 * 3600 && (newState === 'drive' || newState === 'work')) handleShiftStop(true);
-    currentState = newState; modeStartTime = now; if(newState === 'rest') baseRestTime = 0;
+    if(!window.tachoLog) { alert('Броячите не са заредени — обнови страницата.'); return; }
+    let now = Date.now();
+    // след дневна почивка от 9+ ч започва нов работен ден: старата смяна се архивира
+    if(currentState === 'rest' && isShiftActive && (newState === 'drive' || newState === 'work') && now - modeStartTime >= 9 * H_MS) handleShiftStop(true);
+    activityLog = tachoLog.switchTo(activityLog, newState, now, { ferry: isFerryMode });
+    syncStateFromLog();
     saveData(); updateVisuals(); updateUI(); if(newState === 'drive') navTo('main'); 
 }
 
@@ -1049,7 +1156,7 @@ function startGPS() {
                 let spd = Math.round(rawSpd);
                 document.getElementById('current-speed-text').innerHTML = spd;
                 
-                if (spd >= 5 && currentState !== 'drive' && !isOutMode) { if (!isShiftActive) handleShiftStart(true); setManualState('drive'); } 
+                if (spd >= 5 && currentState !== 'drive' && !isOutMode && !(isCrewMode && currentDriver === 2)) { if (!isShiftActive) handleShiftStart(true); setManualState('drive'); } 
                 else if (spd < 3 && isShiftActive && !isOutMode) { if (currentState === 'drive') setManualState('work'); }
                 
                 lastSpeedKmh = rawSpd; feedOverspeed(rawSpd);
@@ -1137,15 +1244,23 @@ function closeCalib() { document.getElementById('calib-modal').style.display = '
 function applyCalibration() { let truck = parseFloat(document.getElementById('input-truck-km').value); let gps = parseFloat(document.getElementById('input-gps-km').value); if (truck && gps) { calibFactor = truck / gps; saveData(); alert("Успешно калибрирано!"); closeCalib(); } }
 function updateDistUI() { document.getElementById('course-dist-text').innerText = courseDistance.toFixed(1); document.getElementById('shift-dist-text').innerText = shiftDistance.toFixed(1) + " км"; }
 
-function openManualModal() { document.getElementById('manual-modal').style.display = 'flex'; }
+function openManualModal() {
+    const now = Date.now();
+    document.getElementById('input-man-from').value = toLocalInput(now - H_MS);
+    document.getElementById('input-man-to').value = toLocalInput(now);
+    document.getElementById('manual-modal').style.display = 'flex';
+}
 function closeManualModal() { document.getElementById('manual-modal').style.display = 'none'; }
+// ръчният запис влиза в дневника с отметка и покрива автоматичния за същото време
 function applyManualEntry() {
-    let addDrive = parseFloat(document.getElementById('input-man-drive').value) || 0; let addWork = parseFloat(document.getElementById('input-man-work').value) || 0;
-    if (addDrive > 0 || addWork > 0) {
-        let driveSecs = addDrive * 60; let workSecs = addWork * 60;
-        baseDailyDrive += driveSecs; baseWeeklyDrive += driveSecs; baseBiWeeklyDrive += driveSecs; baseDriveTime += driveSecs; baseWorkTime += workSecs + driveSecs;
-        hasManualEntryToday = true; saveData(); updateUI(); alert("Времето е добавено ръчно."); closeManualModal();
-    }
+    if (!window.tachoLog) return;
+    const type = document.getElementById('input-man-type').value;
+    const from = new Date(document.getElementById('input-man-from').value).getTime();
+    const to = Math.min(new Date(document.getElementById('input-man-to').value).getTime(), Date.now());
+    try { activityLog = tachoLog.addManual(activityLog, { type, start: from, end: to }); }
+    catch (e) { alert(e.message); return; }
+    hasManualEntryToday = true; syncStateFromLog(); saveData(); updateVisuals(); updateUI(); closeManualModal();
+    alert("Записано като [ВЪВЕДЕНО РЪЧНО].");
 }
 
 // ==================== СМЯНА И ДВОЙКА ====================
@@ -1156,57 +1271,64 @@ function handleShiftStart(isAuto = false) {
         isShiftActive = true; shiftStartedAt = new Date().toISOString(); shiftDistance = 0; muteForToday = false; hasManualEntryToday = false;
         isNightShift = (new Date().getHours() >= 0 && new Date().getHours() < 4);
         if(gpsEnabled && lastLat && lastLon) { fetchLocationData(lastLat, lastLon).then(loc => { startLocation = loc.name; currentCountryCode = loc.code; liveSyncShiftData(); saveData(); }); } else { startLocation = "Ръчен старт"; }
-        liveSyncShiftData(); saveData(); updateShiftButtonUI(); baseDailyDrive = 0; baseWorkTime = 0; updateDistUI(); setManualState('work'); 
+        liveSyncShiftData(); saveData(); updateShiftButtonUI(); updateDistUI(); setManualState('work'); 
     }
 }
 function handleShiftStop(isAuto) {
     if(isAuto || confirm("КРАЙ НА ДНЕВНА СМЯНА?")) {
-        isShiftActive = false; archiveCurrentShift(); shiftStartedAt = null; isNightShift = false; baseDailyDrive = 0; shiftDistance = 0; baseWorkTime = 0; saveData(); updateShiftButtonUI(); setManualState('rest'); buildCalendar();
+        isShiftActive = false; archiveCurrentShift(); shiftStartedAt = null; isNightShift = false; shiftDistance = 0; saveData(); updateShiftButtonUI(); setManualState('rest'); buildCalendar();
     }
 }
 function toggleCrewMode() { if(!confirm("Промяна ДВОЙКА/ЕДИНИЧНА?")) return; isCrewMode = !isCrewMode; currentDriver = 1; localStorage.setItem('th_crew', isCrewMode); localStorage.setItem('th_driver', currentDriver); updateSpecialModeUI(); updateUI(); }
+// двойка: телефонът брои за собственика си; докато колегата кара, той е „на разположение“
 function swapCrewDriver() {
     if(!isCrewMode) return;
-    if(confirm(`Потвърди ПРЕДАВАНЕ НА ВОЛАНА.\nТекущ: Водач ${currentDriver}. Данните му за дневно каране се зануляват за новия водач!`)) {
-        setManualState('work'); currentDriver = currentDriver === 1 ? 2 : 1; baseDailyDrive = 0; baseDriveTime = 0; warning4h15mShown = false; saveData(); updateSpecialModeUI(); alert(`Воланът е предаден успешно на ВОДАЧ ${currentDriver}!`);
+    if(currentDriver === 1) {
+        if(!confirm("Предаваш волана? Докато колегата кара, ти си на разположение (готовност).")) return;
+        currentDriver = 2; setManualState('avail');
+    } else {
+        if(!confirm("Поемаш волана?")) return;
+        currentDriver = 1; setManualState('drive');
     }
+    saveData(); updateSpecialModeUI();
 }
 function toggleOutMode() { isOutMode = !isOutMode; if(isOutMode) setManualState('work'); else setManualState('rest'); updateSpecialModeUI(); }
-function toggleFerryMode() { isFerryMode = !isFerryMode; document.getElementById('btn-mode-ferry').classList.toggle('active', isFerryMode); }
+function toggleFerryMode() {
+    isFerryMode = !isFerryMode; document.getElementById('btn-mode-ferry').classList.toggle('active', isFerryMode);
+    // почивката на ферибота се отбелязва: прекъсванията за качване и слизане не я развалят (чл. 9)
+    if (currentState === 'rest' && window.tachoLog) { activityLog = tachoLog.switchTo(activityLog, 'rest', Date.now(), { ferry: isFerryMode }); saveData(); updateUI(); }
+}
 
 function archiveCurrentShift() {
     if(!shiftStartedAt) return;
-    let nowObj = new Date(); let startObj = new Date(shiftStartedAt); let dateStr = startObj.toDateString();
-    let sessionSecs = Math.floor((nowObj - modeStartTime) / 1000);
-    if(currentState === 'work') baseWorkTime += sessionSecs;
-    if(currentState === 'drive') { baseDailyDrive += sessionSecs; baseWeeklyDrive += sessionSecs; baseBiWeeklyDrive += sessionSecs; baseWorkTime += sessionSecs;}
-    let shiftSecs = Math.floor((nowObj - startObj) / 1000);
-    
-    let violations = [];
-    if(baseDailyDrive > 10 * 3600) violations.push({txt: "Превишено дневно каране (>10ч)", fine: "Глоба: ~150€ до 500€"});
-    let shiftLimit = isCrewMode ? 30 : (isNightShift ? 10 : (jokers['15h'] > 0 ? 15 : 13));
-    if(shiftSecs > shiftLimit * 3600) violations.push({txt: `Превишена работна смяна (>${shiftLimit}ч)`, fine: "Глоба: ~100€ до 250€"});
-    if(baseWeeklyDrive > 56 * 3600) violations.push({txt: "Превишени 56 часа за седмица", fine: "Глоба: ~250€ до 1000€"});
-    if(baseBiWeeklyDrive > 90 * 3600) violations.push({txt: "Превишени 90 часа за 2 седмици", fine: "Глоба: ~250€ до 1000€"});
-    let os = overspeedsSince(startObj.getTime());
+    const now = Date.now(); const startObj = new Date(shiftStartedAt); const startMs = startObj.getTime(); const dateStr = startObj.toDateString();
+    // смяната свършва, когато е започнала почивката
+    const endMs = currentState === 'rest' ? Math.max(startMs, Math.min(modeStartTime, now)) : now;
+    const t = window.tachoLog ? tachoLog.totals(activityLog, startMs, endMs) : { drive: 0, work: 0, manual: false };
+    const R = engineResult(now);
+    const ws = window.tachoEngine ? tachoEngine.weekStart(startMs) : null;
+    // нарушенията по регламента през смяната (седмичните се водят от началото на седмицата)
+    let violations = (R ? R.violations : [])
+        .filter(v => (v.at >= startMs && v.at <= endMs) || ((v.code === 'WEEKLY_DRIVE' || v.code === 'FORTNIGHT_DRIVE') && v.at === ws))
+        .map(v => ({ txt: v.detail, fine: 'Регламент 561/2006, ' + v.article }));
+    let os = overspeedsSince(startMs).filter(x => x.start <= endMs);
     if(os.length) violations.push({txt: `Скорост над 90 км/ч за над 1 мин: ${os.length} ${os.length === 1 ? 'път' : 'пъти'} (макс. ${Math.max(...os.map(x => x.maxSpeed))} км/ч)`, fine: "Записано в тахографа като събитие"});
-    
-    if(baseDailyDrive > DAILY_STD) { jokers['10h']--; if(jokers['10h']<0) jokers['10h']=0; }
-    if(shiftSecs > 13*3600 && !isCrewMode && !isNightShift) { jokers['15h']--; if(jokers['15h']<0) jokers['15h']=0; }
-    
+    const d = R ? R.status.daily : null;
     shiftHistory[dateStr] = {
-        start: startObj.getHours().toString().padStart(2,'0')+":"+startObj.getMinutes().toString().padStart(2,'0'),
-        end: nowObj.getHours().toString().padStart(2,'0')+":"+nowObj.getMinutes().toString().padStart(2,'0'),
-        locStart: startLocation, locEnd: endLocation, length: shiftSecs, drive: baseDailyDrive, work: baseWorkTime, dist: shiftDistance, violations: violations, notes: shiftHistory[dateStr]?.notes || "",
-        jkr10: jokers['10h'], jkr15: jokers['15h'], jkr9: jokers['9h'], compliant: violations.length === 0, manual: hasManualEntryToday
+        start: fmtHour(startObj), end: fmtHour(new Date(endMs)),
+        locStart: startLocation, locEnd: endLocation, length: Math.floor((endMs - startMs) / 1000),
+        drive: Math.floor(t.drive / 1000), work: Math.floor((t.drive + t.work) / 1000), dist: shiftDistance,
+        violations: violations, notes: shiftHistory[dateStr]?.notes || "",
+        jkr10: d ? d.extensionsLeft : jokers['10h'], jkr15: d ? d.reducedRestsLeft : jokers['15h'], jkr9: d ? d.reducedRestsLeft : jokers['9h'],
+        compliant: violations.length === 0, manual: hasManualEntryToday || t.manual
     };
 }
 
 // ==================== UI ФУНКЦИИ ====================
-function updateSpecialModeUI() { document.getElementById('btn-mode-crew').classList.toggle('active', isCrewMode); document.getElementById('btn-mode-out').classList.toggle('active', isOutMode); document.getElementById('crew-badge').style.display = isCrewMode ? 'inline-block' : 'none'; document.getElementById('crew-badge').innerText = "ВОДАЧ " + currentDriver; document.getElementById('btn-swap-driver').style.display = isCrewMode ? 'block' : 'none'; }
+function updateSpecialModeUI() { document.getElementById('btn-mode-crew').classList.toggle('active', isCrewMode); document.getElementById('btn-mode-out').classList.toggle('active', isOutMode); document.getElementById('crew-badge').style.display = isCrewMode ? 'inline-block' : 'none'; document.getElementById('crew-badge').innerText = currentDriver === 1 ? "КАРАМ АЗ" : "КАРА КОЛЕГАТА"; document.getElementById('btn-swap-driver').innerText = currentDriver === 1 ? "🔄 ПРЕДАЙ ВОЛАНА" : "🔄 ПОЕМИ ВОЛАНА"; document.getElementById('btn-swap-driver').style.display = isCrewMode ? 'block' : 'none'; }
 function navTo(view) { currentView = view; document.getElementById('main-view').style.display=view==='main'?'flex':'none'; document.getElementById('rest-view').style.display=view==='rest'?'flex':'none'; document.getElementById('report-view').style.display=view==='report'?'flex':'none'; if(view==='main'||view==='rest') { document.getElementById('btn-nav-main').classList.toggle('active-mode', view==='main'); document.getElementById('btn-nav-rest').classList.toggle('active-mode', view==='rest'); updateVisuals(); } if(view==='report') updateUI(); }
 function updateShiftButtonUI() { let btn = document.getElementById('btn-shift-startstop'); if(isShiftActive) { btn.innerText = "🏁 CTOП СМЯНА"; btn.classList.add('active'); } else { btn.innerText = "🏁 СТАРТ СМЯНА"; btn.classList.remove('active'); } }
-function changeShiftLimit(h) { shiftLengthLimit=h; document.getElementById('btn-shift-13h').classList.toggle('active', h===13); document.getElementById('btn-shift-15h').classList.toggle('active', h===15); updateUI(); }
+function changeShiftLimit(h) { showWarningModal('Краят на смяната се смята сам по регламента: до 15 ч, докато имаш намалени дневни почивки (9 ч) за седмицата, иначе до 13 ч. При двойка — до 21 ч.'); }
 function changeRestSelection(h) { currentRestSel=h; document.getElementById('btn-rest-9h').classList.toggle('active-green', h===9); document.getElementById('btn-rest-11h').classList.toggle('active-green', h===11); updateUI(); }
 function changeRestWeekly(h) { currentWeeklySel=h; document.getElementById('btn-rest-24h').classList.toggle('active-orange', h===24); document.getElementById('btn-rest-45h').classList.toggle('active-orange', h===45); updateUI(); }
 function updateJokerUI() { document.getElementById('joker-10-text').innerText=jokers['10h']+" бр."; document.getElementById('joker-15-text').innerText=jokers['15h']+" бр."; document.getElementById('joker-9-text').innerText=jokers['9h']+" бр."; document.getElementById('joker-9-text-rest').innerText=jokers['9h']+" бр."; }
@@ -1217,17 +1339,28 @@ function updateVisuals() {
     if(currentState==='drive'){ mainStat.innerText="КАРАНЕ »»»"; mainStat.style.color="#4CAF50"; ring.style.stroke="#4CAF50"; document.getElementById('top-status-text').innerText="КАРАНЕ"; topBadge.style.color="#4CAF50"; document.getElementById('top-status-dot').style.background="#4CAF50";}
     else if(currentState==='rest'){ mainStat.innerText="В ПАУЗА"; mainStat.style.color="#aaa"; ring.style.stroke="#aaa"; document.getElementById('top-status-text').innerText="ПАУЗА"; topBadge.style.color="#F44336"; document.getElementById('top-status-dot').style.background="#F44336";}
     else if(currentState==='work'){ mainStat.innerText="РАБОТА🔨"; mainStat.style.color="#2196F3"; ring.style.stroke="#2196F3"; document.getElementById('top-status-text').innerText="ЧУКЧЕТА"; topBadge.style.color="#2196F3"; document.getElementById('top-status-dot').style.background="#2196F3"; document.getElementById('btn-state-work').classList.add('active-mode');}
+    else if(currentState==='avail'){ mainStat.innerText="ГОТОВНОСТ ⌛"; mainStat.style.color="#9C27B0"; ring.style.stroke="#9C27B0"; document.getElementById('top-status-text').innerText="ГОТОВНОСТ"; topBadge.style.color="#9C27B0"; document.getElementById('top-status-dot').style.background="#9C27B0";}
 }
 
-function updateShiftUI(nowMs, dailyLimSecs) {
-    if(!isShiftActive || !shiftStartedAt) { document.getElementById('shift-start-text').innerText="--:--"; document.getElementById('shift-elapsed-text').innerText="--:--"; document.getElementById('shift-end-text').innerText="--:--"; document.getElementById('night-badge').style.display = 'none'; return; }
-    let startD = new Date(shiftStartedAt); let sDiff = Math.floor((nowMs - startD)/1000); let sLimit = isCrewMode ? 30 : (isNightShift ? 10 : shiftLengthLimit); let sEndObj = new Date(startD.getTime() + sLimit*3600*1000); let sLeft = Math.max(0, sLimit*3600 - sDiff);
-    document.getElementById('shift-start-text').innerText=fmtHour(startD); document.getElementById('shift-elapsed-text').innerText=Math.floor(sDiff/3600)+":"+Math.floor((sDiff%3600)/60).toString().padStart(2,'0'); document.getElementById('shift-elapsed-text').style.color= sLeft < 2700 ? "#F44336" : "#2196F3"; document.getElementById('shift-end-text').innerText=fmtHour(sEndObj);
+// работната смяна по броячите: начало, изминало и докога трябва да започне дневната почивка
+function updateShiftUI(nowMs, st) {
+    const d = st.daily, set = (id, v) => { document.getElementById(id).innerText = v; };
     document.getElementById('night-badge').style.display = isNightShift ? 'inline-block' : 'none';
+    if (d.dutyStart == null) { set('shift-start-text', '--:--'); set('shift-elapsed-text', '--:--'); set('shift-end-text', '--:--'); return; }
+    const sDiff = Math.floor((nowMs - d.dutyStart) / 1000);
+    set('shift-start-text', fmtHour(new Date(d.dutyStart)) + (d.startAssumed ? '?' : ''));
+    set('shift-elapsed-text', Math.floor(sDiff/3600) + ":" + Math.floor((sDiff%3600)/60).toString().padStart(2,'0'));
+    const left = d.latestRestStart != null ? d.latestRestStart - nowMs : Infinity;
+    document.getElementById('shift-elapsed-text').style.color = left < 45 * 60000 ? "#F44336" : "#2196F3";
+    set('shift-end-text', d.latestRestStart != null ? fmtHour(new Date(d.latestRestStart)) : '--:--');
+    const span = d.latestRestStart != null ? d.latestRestStart - d.dutyStart : 0;
+    // 13 или 15 ч според оставащите намалени почивки; при двойка прозорецът е по-дълъг и не светва нито едно
+    document.getElementById('btn-shift-13h').classList.toggle('active', span > 0 && span <= 13 * H_MS + 60000);
+    document.getElementById('btn-shift-15h').classList.toggle('active', span > 13 * H_MS + 60000 && span <= 15 * H_MS + 60000);
 }
 
-function updateRestFillableLabels(rSecs) {
-    let modeST = modeStartTime; 
+function updateRestFillableLabels(rSecs, since) {
+    let modeST = since; 
     function setB(id, tgt, color) { let el = document.getElementById(id); if(!el) return; let p = Math.min((rSecs/tgt)*100, 100); el.style.background = `linear-gradient(to right, ${color} ${p}%, #111 ${p}%)`; }
     let greenF = '#1b5e20', blueF = '#0d47a1', orangeF = '#e65100';
     setB('label-45m', 45*60, greenF); setB('label-15m', 15*60, greenF); setB('label-30m', 30*60, blueF); setB('label-3h', 3*3600, greenF); setB('label-9h-split', 9*3600, blueF); setB('label-daily', currentRestSel*3600, greenF); setB('label-weekly', currentWeeklySel*3600, orangeF);
@@ -1265,7 +1398,7 @@ function showReport(dateStr) {
 function shareReport() {
     if(!currentReportDate) return; let data = shiftHistory[currentReportDate]; let isTodayLive = (currentReportDate === new Date().toDateString() && isShiftActive);
     let txt = `📋 ОТЧЕТ ЗА СМЯНА: ${document.getElementById('rep-date').innerText}\n`;
-    if(isTodayLive) { let drv = Math.floor(baseDailyDrive/3600)+":"+Math.floor((baseDailyDrive%3600)/60).toString().padStart(2,'0'); let wrk = Math.floor(baseWorkTime/3600)+":"+Math.floor((baseWorkTime%3600)/60).toString().padStart(2,'0'); txt += `🛑 СТАТУС: В ход (Реално време)\n🚚 Каране: ${drv} ч.\n🔨 Работа: ${wrk} ч.\n🛣 Пробег днес: ${shiftDistance.toFixed(1)} км.\n`; if(hasManualEntryToday) txt += `⚠️ Има ВЪВЕДЕНО РЪЧНО време!\n`; } 
+    if(isTodayLive) { const t = shiftTotals(Date.now()); let drv = fmtSecsShort(Math.floor(t.drive/1000)); let wrk = fmtSecsShort(Math.floor((t.drive + t.work)/1000)); txt += `🛑 СТАТУС: В ход (Реално време)\n🚚 Каране: ${drv} ч.\n🔨 Работа: ${wrk} ч.\n🛣 Пробег днес: ${shiftDistance.toFixed(1)} км.\n`; if(hasManualEntryToday || t.manual) txt += `⚠️ Има ВЪВЕДЕНО РЪЧНО време!\n`; } 
     else if (data) { txt += `📍 От: ${data.locStart}\n📍 До: ${data.locEnd}\n⏱ Старт: ${data.start} | Край: ${data.end}\n🚚 Каране: ${fmtSecsShort(data.drive)} ч.\n🔨 РАБОТНО ВРЕМЕ: ${fmtSecsShort(data.work)} ч.\n🛣 Пробег: ${data.dist.toFixed(1)} км.\n`; if(data.manual) txt += `⚠️ Част от времето е ВЪВЕДЕНО РЪЧНО!\n`; txt += `📝 Бележки: ${data.notes || "Няма"}`; }
     if(navigator.share) navigator.share({title: 'Дневен Отчет', text: txt}); else { navigator.clipboard.writeText(txt); alert("Отчетът е копиран!"); }
 }
@@ -1421,9 +1554,13 @@ function setupMainPttControls() {
 }
 </script>
 <script type="module">
-// модулът за скоростта (engine/overspeed.js) се зарежда отделно и се подава на приложението
+// модулите от папка engine/ се зареждат отделно и се подават на приложението
 import { createOverspeedWatch } from './engine/overspeed.js';
+import { analyze, describe, clock, weekStart } from './engine/tacho-rules.js';
+import * as tachoLog from './engine/activity-log.js';
 window.createOverspeedWatch = createOverspeedWatch;
+window.tachoEngine = { analyze, describe, clock, weekStart };
+window.tachoLog = tachoLog;
 </script>
 </body>
 </html>
