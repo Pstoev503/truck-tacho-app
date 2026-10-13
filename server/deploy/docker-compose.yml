@@ -1,0 +1,40 @@
+# Пуска базата, сървъра и HTTPS (Caddy взима сертификат сам).
+# 1) cp .env.example .env и попълни стойностите   2) docker compose up -d
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: taho
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?попълни DB_PASSWORD в .env}
+      POSTGRES_DB: taho
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://taho:${DB_PASSWORD}@db:5432/taho
+      ALLOWED_ORIGINS: https://pstoev503.github.io,https://${DOMAIN}
+      REGISTRATION_CODE: ${REGISTRATION_CODE:-}
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    command: caddy reverse-proxy --from ${DOMAIN:?попълни DOMAIN в .env} --to api:8000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:

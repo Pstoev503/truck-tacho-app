@@ -1,0 +1,52 @@
+name: Тестове
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Броячи, дневник, маршрути (Node)
+        working-directory: engine
+        run: node --test
+
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: taho
+          POSTGRES_PASSWORD: taho
+          POSTGRES_DB: taho_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r server/requirements-dev.txt
+      - name: Сървър (PostgreSQL)
+        working-directory: server
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://taho:taho@localhost:5432/taho_test
+        run: python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Образът на сървъра се сглобява
+        run: docker build -f server/Dockerfile -t top10eu-server .

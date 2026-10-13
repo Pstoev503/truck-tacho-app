@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="bg" translate="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#111111">
+<title>Шефско меню</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css">
+<style>
+  :root { --bg:#0b0b0b; --card:#161616; --line:#2a2a2a; --text:#f2f2f2; --dim:#9a9a9a;
+          --green:#4CAF50; --blue:#2196F3; --orange:#FF9800; --red:#F44336; --purple:#9C27B0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; font-size:15px; }
+  header { position:sticky; top:0; z-index:1000; background:#111; border-bottom:1px solid var(--line); padding:10px 12px 0; }
+  .top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .top h1 { font-size:18px; margin:0; }
+  .top .co { color:var(--dim); font-size:12px; }
+  a.back { color:var(--dim); text-decoration:none; font-size:13px; border:1px solid var(--line); padding:6px 10px; border-radius:8px; }
+  nav { display:flex; gap:4px; margin-top:10px; overflow-x:auto; }
+  nav button { flex:1; background:none; border:none; color:var(--dim); padding:10px 6px; font-size:14px; font-weight:600; border-bottom:3px solid transparent; cursor:pointer; white-space:nowrap; }
+  nav button.on { color:var(--text); border-bottom-color:var(--blue); }
+  main { padding:12px; max-width:900px; margin:0 auto; }
+  section { display:none; } section.on { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:10px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { flex:1; }
+  input, select, textarea { width:100%; background:#000; color:var(--text); border:1px solid #3a3a3a; border-radius:8px; padding:11px; font-size:16px; font-family:inherit; }
+  textarea { min-height:60px; resize:vertical; }
+  label.f { display:block; font-size:12px; color:var(--dim); margin:10px 0 4px; }
+  .b { background:#222; color:var(--text); border:1px solid #3a3a3a; border-radius:10px; padding:11px 12px; font-size:15px; font-weight:600; cursor:pointer; }
+  .b.pri { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .b.ok { background:var(--green); border-color:var(--green); color:#fff; }
+  .b.warn { border-color:var(--red); color:var(--red); }
+  .b.sm { padding:7px 10px; font-size:13px; border-radius:8px; }
+  .b:disabled { opacity:.5; cursor:default; }
+  a.b { display:inline-block; text-decoration:none; }
+  .muted { color:var(--dim); font-size:13px; }
+  .err { color:var(--red); font-size:14px; min-height:18px; margin-top:6px; }
+  .tabs2 { display:flex; gap:6px; margin-bottom:10px; } .tabs2 button { flex:1; }
+  .tabs2 button.on { border-color:var(--blue); color:var(--blue); }
+  /* шофьори */
+  .drv { border-left:5px solid #555; }
+  .drv.drive { border-left-color:var(--green); } .drv.work { border-left-color:var(--blue); }
+  .drv.avail { border-left-color:var(--purple); } .drv.rest { border-left-color:#888; }
+  .drv .name { font-size:17px; font-weight:700; }
+  .badge { display:inline-block; font-size:11px; font-weight:700; padding:3px 7px; border-radius:6px; background:#333; color:#ddd; vertical-align:middle; }
+  .badge.drive { background:var(--green); color:#000; } .badge.work { background:var(--blue); color:#fff; }
+  .badge.avail { background:var(--purple); color:#fff; } .badge.rest { background:#555; color:#fff; }
+  .badge.off { background:#3a1d1d; color:#ff8a80; }
+  .big { font-size:26px; font-weight:800; margin:6px 0 2px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin-top:8px; font-size:13px; }
+  .grid b { display:block; font-size:15px; }
+  .warns { margin-top:8px; display:flex; flex-direction:column; gap:4px; }
+  .warns div { background:#2a1f00; color:#ffcc80; border-radius:6px; padding:6px 8px; font-size:13px; }
+  .warns div.bad { background:#2b0f0f; color:#ff8a80; }
+  .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .code { font-size:28px; font-weight:800; letter-spacing:3px; text-align:center; padding:10px; background:#000; border-radius:10px; margin:8px 0; }
+  /* карта */
+  #map, #fleetMap { height:52vh; min-height:280px; border-radius:12px; border:1px solid var(--line); background:#1b1b1b; }
+  #fleetMap { height:34vh; min-height:200px; margin-bottom:10px; display:none; }
+  .pts { list-style:none; padding:0; margin:8px 0 0; }
+  .pts li { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .pts .n { width:26px; height:26px; flex:0 0 26px; border-radius:50%; background:var(--blue); color:#fff; font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
+  .pts li:first-child .n { background:var(--green); } .pts li:last-child .n { background:var(--red); }
+  .pts input { padding:8px; font-size:14px; }
+  .pts button { flex:0 0 auto; }
+  .found { list-style:none; padding:0; margin:6px 0 0; }
+  .found li { padding:9px; border-bottom:1px solid var(--line); cursor:pointer; font-size:14px; }
+  .found li:hover { background:#1f1f1f; }
+  .pin { width:24px; height:24px; border-radius:50%; color:#fff; font-weight:700; font-size:12px; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.6); }
+  /* календар */
+  .week { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0 10px; }
+  .day { cursor:pointer; }
+  .day .h { display:flex; justify-content:space-between; font-weight:700; }
+  .bar { position:relative; height:16px; background:#222; border-radius:4px; overflow:hidden; margin:8px 0 4px; }
+  .bar span { position:absolute; top:0; bottom:0; }
+  .bar .drive { background:var(--green); } .bar .work { background:var(--blue); } .bar .avail { background:var(--purple); } .bar .rest { background:#444; }
+  .legend { display:flex; gap:10px; font-size:11px; color:var(--dim); margin-bottom:8px; flex-wrap:wrap; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+  .viol { color:#ff8a80; font-size:13px; margin-top:4px; }
+  .detail { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; font-size:13px; display:none; }
+  .day.open .detail { display:block; }
+  .toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:#222; border:1px solid #444; color:#fff; padding:12px 16px; border-radius:10px; z-index:3000; display:none; max-width:92vw; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <div><h1>🔑 Шефско меню</h1><div class="co" id="coName">без сървър</div></div>
+    <a class="back" href="index.html">◀ Към приложението</a>
+  </div>
+  <nav>
+    <button data-tab="drivers" class="on">🚚 Шофьори</button>
+    <button data-tab="route">📍 Маршрут</button>
+    <button data-tab="calendar">📅 Календар</button>
+    <button data-tab="settings">⚙</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ───────── вход ───────── -->
+  <section id="login">
+    <div class="card">
+      <div class="tabs2"><button class="b on" data-mode="login">Вход</button><button class="b" data-mode="register">Нова фирма</button></div>
+      <form id="loginForm">
+        <div class="reg-only" style="display:none">
+          <label class="f">Фирма</label><input name="company" autocomplete="organization">
+          <label class="f">Твоето име</label><input name="name" autocomplete="name">
+        </div>
+        <label class="f">Имейл</label><input name="email" type="email" autocomplete="email" required>
+        <label class="f">Парола (поне 8 знака)</label><input name="password" type="password" autocomplete="current-password" required minlength="8">
+        <div class="reg-only" style="display:none">
+          <label class="f">Код за регистрация (ако сървърът иска)</label><input name="registration_code">
+        </div>
+        <label class="f">Адрес на сървъра</label><input name="server" placeholder="https://…" inputmode="url">
+        <div class="err" id="loginErr"></div>
+        <button class="b pri" type="submit" style="width:100%; margin-top:8px" id="loginBtn">Влез</button>
+      </form>
+    </div>
+    <div class="card muted">Без сървър можеш да чертаеш маршрут и да го пращаш на шофьора като връзка (Viber, WhatsApp). <button class="b sm" id="routeOnly" style="margin-top:8px">📍 Само маршрут</button></div>
+  </section>
+
+  <!-- ───────── шофьори ───────── -->
+  <section id="drivers">
+    <div id="fleetMap"></div>
+    <div class="row" style="margin-bottom:10px"><button class="b pri" id="addDriver">＋ Шофьор</button><button class="b" id="refresh">↻ Обнови</button></div>
+    <div id="driverList"></div>
+    <div class="muted" id="driversNote"></div>
+  </section>
+
+  <!-- ───────── маршрут ───────── -->
+  <section id="route">
+    <div class="card">
+      <div class="row"><input id="search" placeholder="Търси място: град, склад, адрес…"><button class="b" id="searchBtn" style="flex:0 0 auto">Търси</button></div>
+      <ul class="found" id="found"></ul>
+      <div class="muted" style="margin-top:6px">Или докосни картата, за да сложиш точка. Точките се местят с влачене.</div>
+      <div class="row" style="margin-top:8px"><input id="coords" placeholder="или координати от Google Maps: 42.337, 23.553"><button class="b" id="coordsBtn" style="flex:0 0 auto">＋</button></div>
+    </div>
+    <div id="map"></div>
+    <div class="card" style="margin-top:10px">
+      <label class="f">Име на маршрута</label><input id="rName" placeholder="напр. Самоков – Тимишоара">
+      <ol class="pts" id="pts"></ol>
+      <div class="muted" id="rKm"></div>
+      <label class="f">Бележки за шофьора</label><textarea id="rNotes" placeholder="напр. без Видин, рампа 4, разтоварване до 14:00"></textarea>
+      <div class="server-only"><label class="f">На кой шофьор</label><select id="rDriver"></select></div>
+      <div class="err" id="routeErr"></div>
+      <div class="acts">
+        <button class="b ok server-only" id="sendRoute">📨 Изпрати на шофьора</button>
+        <button class="b" id="shareRoute">🔗 Сподели връзка</button>
+        <button class="b" id="previewRoute">▶ Провери в Google Maps</button>
+        <button class="b warn" id="clearRoute">Изчисти</button>
+      </div>
+    </div>
+    <div class="server-only"><h3 style="margin:14px 0 6px; font-size:15px">Изпратени маршрути</h3><div id="sentRoutes" class="muted">—</div></div>
+  </section>
+
+  <!-- ───────── календар ───────── -->
+  <section id="calendar">
+    <div class="card">
+      <label class="f" style="margin-top:0">Шофьор</label><select id="cDriver"></select>
+      <div class="week"><button class="b sm" id="prevWeek">◀</button><b id="weekLabel"></b><button class="b sm" id="nextWeek">▶</button></div>
+      <div class="legend"><span><i style="background:var(--green)"></i>каране</span><span><i style="background:var(--blue)"></i>работа</span><span><i style="background:var(--purple)"></i>готовност</span><span><i style="background:#444"></i>почивка</span><span><i style="background:#222"></i>без запис</span></div>
+      <div class="muted" id="weekSum"></div>
+    </div>
+    <div id="days"></div>
+  </section>
+
+  <!-- ───────── настройки ───────── -->
+  <section id="settings">
+    <div class="card">
+      <div id="whoami" class="muted">—</div>
+      <label class="f">Адрес на сървъра</label><input id="serverInput" inputmode="url">
+      <div class="acts"><button class="b" id="saveServer">Запази адреса</button><button class="b warn" id="logout">Излез</button></div>
+    </div>
+    <div class="card muted">
+      Броячите се смятат тук, в браузъра, от дневника, който телефонът на шофьора праща — със същите правила като в кабината (Регламент 561/2006). Ако телефонът не е изпращал отдавна, числата може да не са точни — виж „последна връзка“.
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script src="vendor/leaflet-1.9.4/leaflet.js"></script>
+<script type="module">
+import { analyze, fmt, clock } from './engine/tacho-rules.js';
+import { totals } from './engine/activity-log.js';
+import { encodeRoute, googleMapsLinks, straightKm, cleanRoute } from './engine/route.js';
+import { serverUrl, dayKey } from './engine/sync.js';
+
+const H = 3600_000, DAY = 24 * H, MIN = 60_000;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const store = {
+  get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
+};
+const S = { server: serverUrl(store.get('boss_server')), token: store.get('boss_token') || '', company: null, user: null,
+  drivers: [], acts: {}, actsAt: {}, routeOnly: false };
+const TZ = 'Europe/Sofia';
+const ACT = { drive: 'кара', work: 'работа', avail: 'готовност', rest: 'почивка', unknown: '—' };
+
+function toast(msg, ms = 3500) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', ms); }
+
+async function api(path, { method = 'GET', body } = {}) {
+  if (!S.server) throw new Error('Няма адрес на сървъра');
+  let res;
+  try {
+    res = await fetch(S.server + path, { method, headers: { 'Content-Type': 'application/json', ...(S.token ? { Authorization: 'Bearer ' + S.token } : {}) },
+      body: body ? JSON.stringify(body) : undefined });
+  } catch { throw new Error('Няма връзка със сървъра'); }
+  let data = null; try { data = await res.json(); } catch {}
+  if (res.status === 401 && S.token) { logoutLocal(); }
+  if (!res.ok) {
+    const d = data && data.detail;
+    throw new Error(typeof d === 'string' ? d : res.status === 422 ? 'Провери полетата (паролата е поне 8 знака, имейлът да е истински)' : `Грешка ${res.status}`);
+  }
+  return data;
+}
+
+// ───────── навигация между разделите ─────────
+function show(tab) {
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === tab));
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  if (tab === 'route') setTimeout(() => routeMap && routeMap.invalidateSize(), 50);
+  if (tab === 'drivers') setTimeout(() => fleetMap && fleetMap.invalidateSize(), 50);
+  if (tab === 'calendar') renderCalendar();
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  const needServer = b.dataset.tab !== 'route';
+  if (needServer && !S.token) { show('login'); return; }
+  show(b.dataset.tab);
+});
+function applyMode() {
+  const on = !!S.token;
+  document.querySelectorAll('.server-only').forEach(e => e.style.display = on ? '' : 'none');
+  $('coName').textContent = on && S.company ? `${S.company.name} · ${S.user.name}` : (S.routeOnly ? 'само маршрут (без сървър)' : 'не си влязъл');
+  $('serverInput').value = S.server;
+  $('whoami').textContent = on && S.user ? `Влязъл: ${S.user.name} (${S.user.email || ''})` : 'Не си влязъл';
+}
+
+// ───────── вход и регистрация ─────────
+let mode = 'login';
+document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.reg-only').forEach(e => e.style.display = mode === 'register' ? '' : 'none');
+  $('loginBtn').textContent = mode === 'register' ? 'Създай фирмата' : 'Влез';
+  $('loginForm').password.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+});
+$('loginForm').onsubmit = async ev => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const server = serverUrl(f.get('server'));
+  $('loginErr').textContent = '';
+  if (!server) { $('loginErr').textContent = 'Въведи адреса на сървъра (започва с https://)'; return; }
+  S.server = server; store.set('boss_server', server);
+  try {
+    const body = mode === 'register'
+      ? { company: f.get('company'), name: f.get('name'), email: f.get('email'), password: f.get('password'), registration_code: f.get('registration_code') || '' }
+      : { email: f.get('email'), password: f.get('password') };
+    const out = await api(mode === 'register' ? '/api/owner/register' : '/api/owner/login', { method: 'POST', body });
+    S.token = out.token; S.user = out.user; S.company = out.company; S.routeOnly = false;
+    store.set('boss_token', S.token);
+    ev.target.password.value = '';
+    applyMode(); show('drivers'); await loadDrivers(true);
+  } catch (e) { $('loginErr').textContent = e.message; }
+};
+$('routeOnly').onclick = () => { S.routeOnly = true; applyMode(); show('route'); };
+function logoutLocal() { S.token = ''; S.user = null; S.company = null; store.set('boss_token', null); applyMode(); show('login'); }
+$('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} logoutLocal(); };
+$('saveServer').onclick = () => { const v = serverUrl($('serverInput').value); if (!v) { toast('Адресът трябва да започва с https://'); return; } S.server = v; store.set('boss_server', v); toast('Запазено'); };
+
+// ───────── шофьори: жив отчет ─────────
+async function loadActs(d, force = false) {
+  const now = Date.now();
+  if (!force && S.acts[d.id] && now - S.actsAt[d.id] < 2 * MIN) return S.acts[d.id];
+  const out = await api(`/api/drivers/${d.id}/activities?since=${now - 35 * DAY}`);
+  S.acts[d.id] = out.activities; S.actsAt[d.id] = now;
+  return out.activities;
+}
+function optsFor(d, now) {
+  const o = { now, timeZone: TZ, multiManning: !!d.status?.crew };
+  if (d.status?.lastWeeklyRestEnd) o.lastWeeklyRestEnd = d.status.lastWeeklyRestEnd;
+  return o;
+}
+function ago(t) {
+  if (!t) return 'никога';
+  const m = Math.floor((Date.now() - t) / MIN);
+  if (m < 1) return 'току-що'; if (m < 60) return `преди ${m} мин`;
+  const h = Math.floor(m / 60); if (h < 48) return `преди ${h} ч`;
+  return `преди ${Math.floor(h / 24)} дни`;
+}
+const AFTER = { break: 'пауза', daily: 'дневна почивка', dailyRest: 'дневна почивка', weekly: 'край на 56 ч', fortnight: 'край на 90 ч', weeklyRest: 'седмична почивка' };
+const VIOL = c => ({ CONTINUOUS_DRIVE: 'Над 4:30 без пауза', DAILY_DRIVE: 'Дневно каране над 10 ч', DAILY_DRIVE_EXT: 'Трето удължение до 10 ч', WEEKLY_DRIVE: 'Над 56 ч за седмицата', FORTNIGHT_DRIVE: 'Над 90 ч за 2 седмици', DAILY_REST: 'Дневната почивка закъсня', REDUCED_DAILY_RESTS: 'Над 3 намалени дневни почивки', WEEKLY_REST_LATE: 'Седмичната почивка закъсня', CONSECUTIVE_REDUCED_WEEKLY: 'Две поредни намалени седмични', COMPENSATION: 'Компенсация не е взета' }[c] || c);
+
+function driverCard(d) {
+  const now = Date.now();
+  const acts = S.acts[d.id];
+  let st = null, viol = [];
+  if (acts && acts.length) {
+    try { const r = analyze(acts, optsFor(d, now)); st = r.status; viol = r.violations.filter(v => v.at >= now - 7 * DAY); } catch (e) { console.error(e); }
+  }
+  const stale = !d.last_sync_at || now - d.last_sync_at > 15 * MIN;
+  const act = st ? st.activity : 'unknown';
+  const lines = [];
+  if (!d.active) lines.push('<span class="badge off">спрян</span>');
+  else if (!d.connected) lines.push('<span class="badge off">телефонът не е свързан</span>');
+  const w = (st?.warnings || []).map(x => `<div>${esc(x.message)}</div>`).join('') + viol.slice(-3).map(v => `<div class="bad">${esc(VIOL(v.code))} · ${esc(clock(v.at, { timeZone: TZ }))}</div>`).join('');
+  return `<div class="card drv ${act}">
+    <div class="row" style="align-items:flex-start"><div><span class="name">${esc(d.name)}</span> <span class="badge ${act}">${ACT[act] || act}</span> ${lines.join(' ')}</div>
+      <div class="muted" style="text-align:right; flex:0 0 auto">последна връзка<br><b style="color:${stale ? 'var(--orange)' : 'var(--text)'}">${ago(d.last_sync_at)}</b></div></div>
+    ${st ? `<div class="big">${st.driveRemaining > 0 ? fmt(st.driveRemaining) + ' каране' : (st.resumeAt ? 'тръгва ' + esc(clock(st.resumeAt, { timeZone: TZ })) : 'трябва почивка')}</div>
+    <div class="muted">${st.driveRemaining > 0 ? 'после: ' + (AFTER[st.binding] || '') : ''}${stale ? ' · може да не е точно — телефонът не е изпращал отдавна' : ''}</div>
+    <div class="grid">
+      <div>Днес каране<b>${fmt(st.daily.driven)} / ${fmt(st.daily.limit)}</b></div>
+      <div>Почивка до<b>${st.daily.latestRestStart ? esc(clock(st.daily.latestRestStart, { timeZone: TZ })) : '—'}</b></div>
+      <div>Седмица<b>${fmt(st.weekly.driven)} / 56 ч</b></div>
+      <div>Седмична почивка до<b>${st.weeklyRest.onWeeklyRest ? 'почива' : st.weeklyRest.deadline ? esc(clock(st.weeklyRest.deadline, { timeZone: TZ })) + (st.weeklyRest.estimated ? ' (най-късно)' : '') : '—'}</b></div>
+    </div>` : `<div class="muted" style="margin-top:6px">${d.connected ? 'Още няма записи от телефона.' : 'Прати покана, за да свърже телефона си.'}</div>`}
+    ${w ? `<div class="warns">${w}</div>` : ''}
+    <div class="acts">
+      <button class="b sm" data-act="invite" data-id="${d.id}">🔑 Покана</button>
+      <button class="b sm" data-act="cal" data-id="${d.id}">📅 Календар</button>
+      <button class="b sm" data-act="route" data-id="${d.id}">📍 Маршрут</button>
+      ${d.position ? `<a class="b sm" style="text-decoration:none" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${d.position.lat},${d.position.lon}">🗺 ${ago(d.position.at)}</a>` : ''}
+      <button class="b sm ${d.active ? 'warn' : ''}" data-act="toggle" data-id="${d.id}">${d.active ? 'Спри' : 'Пусни'}</button>
+    </div></div>`;
+}
+function renderDrivers() {
+  $('driverList').innerHTML = S.drivers.length ? S.drivers.map(driverCard).join('') : '<div class="card muted">Още няма шофьори. Натисни „＋ Шофьор“ — ще получиш код и връзка за телефона му.</div>';
+  $('driversNote').textContent = S.drivers.length ? 'Числата се смятат тук от дневника на телефона и се обновяват сами.' : '';
+  renderFleetMap();
+}
+async function loadDrivers(force = false) {
+  if (!S.token) return;
+  try {
+    const out = await api('/api/drivers');
+    S.drivers = out.drivers;
+    await Promise.all(S.drivers.filter(d => d.connected || d.last_sync_at).map(d => loadActs(d, force).catch(() => null)));
+    renderDrivers(); fillDriverSelects();
+  } catch (e) { toast(e.message); }
+}
+$('refresh').onclick = () => loadDrivers(true);
+$('addDriver').onclick = async () => {
+  const name = prompt('Име на шофьора:');
+  if (!name || name.trim().length < 2) return;
+  try { const out = await api('/api/drivers', { method: 'POST', body: { name: name.trim() } }); await loadDrivers(); showInvite(out.driver, out.invite); }
+  catch (e) { toast(e.message); }
+};
+function inviteLink(code) {
+  const base = location.href.replace(/[#?].*$/, '').replace(/boss\.html$/, '');
+  return `${base}index.html#join=${encodeURIComponent(code)}&server=${encodeURIComponent(S.server)}`;
+}
+function showInvite(d, inv) {
+  const link = inviteLink(inv.code);
+  const box = document.createElement('div');
+  box.className = 'card';
+  box.innerHTML = `<b>Покана за ${esc(d.name)}</b><div class="code">${esc(inv.code)}</div>
+    <div class="muted">Важи до ${esc(clock(inv.expires_at, { timeZone: TZ }))}, еднократно. Прати връзката на шофьора — като я отвори на телефона си, приложението се свързва само.</div>
+    <div class="acts"><button class="b ok" data-share>📨 Прати връзката</button><button class="b" data-copy>Копирай</button><button class="b" data-close>Затвори</button></div>`;
+  $('driverList').prepend(box);
+  box.querySelector('[data-share]').onclick = () => shareText(`Свържи приложението с ${S.company?.name || 'фирмата'}: ${link}`, link);
+  box.querySelector('[data-copy]').onclick = () => copy(link);
+  box.querySelector('[data-close]').onclick = () => box.remove();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+$('driverList').onclick = async ev => {
+  const b = ev.target.closest('button[data-act]'); if (!b) return;
+  const d = S.drivers.find(x => x.id == b.dataset.id); if (!d) return;
+  if (b.dataset.act === 'invite') {
+    if (d.connected && !confirm(`Нов код за ${d.name}? Телефонът му ще се свърже наново, щом влезе с новия код.`)) return;
+    try { const out = await api(`/api/drivers/${d.id}/invite`, { method: 'POST' }); showInvite(d, out.invite); } catch (e) { toast(e.message); }
+  }
+  if (b.dataset.act === 'toggle') {
+    if (d.active && !confirm(`Да спра ${d.name}? Телефонът му се изключва от фирмата.`)) return;
+    try { await api(`/api/drivers/${d.id}`, { method: 'PATCH', body: { active: !d.active } }); await loadDrivers(true); } catch (e) { toast(e.message); }
+  }
+  if (b.dataset.act === 'cal') { $('cDriver').value = d.id; show('calendar'); }
+  if (b.dataset.act === 'route') { $('rDriver').value = d.id; show('route'); }
+};
+
+// ───────── карти ─────────
+const L = window.L;
+const tiles = () => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' });
+let routeMap = null, fleetMap = null, fleetLayer = null, routeLayer = null;
+function pinIcon(text, color) { return L.divIcon({ className: '', html: `<div class="pin" style="background:${color}">${esc(text)}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] }); }
+function renderFleetMap() {
+  const withPos = S.drivers.filter(d => d.position);
+  $('fleetMap').style.display = withPos.length && L ? 'block' : 'none';
+  if (!withPos.length || !L) return;
+  if (!fleetMap) { fleetMap = L.map('fleetMap'); tiles().addTo(fleetMap); fleetLayer = L.layerGroup().addTo(fleetMap); }
+  fleetLayer.clearLayers();
+  const ll = withPos.map(d => [d.position.lat, d.position.lon]);
+  withPos.forEach(d => L.marker([d.position.lat, d.position.lon], { icon: pinIcon('🚚', 'var(--green)') }).bindPopup(`${esc(d.name)}<br>${ago(d.position.at)}`).addTo(fleetLayer));
+  fleetMap.fitBounds(ll, { padding: [30, 30], maxZoom: 11 });
+}
+
+// ───────── маршрут ─────────
+let pts = [];
+try { pts = JSON.parse(store.get('boss_route_draft') || '[]').filter(p => Number.isFinite(p.lat)); } catch {}
+$('rName').value = store.get('boss_route_name') || '';
+$('rNotes').value = store.get('boss_route_notes') || '';
+function saveDraft() { store.set('boss_route_draft', JSON.stringify(pts)); store.set('boss_route_name', $('rName').value); store.set('boss_route_notes', $('rNotes').value); }
+['rName', 'rNotes'].forEach(id => $(id).oninput = saveDraft);
+function initRouteMap() {
+  if (routeMap || !L) return;
+  routeMap = L.map('map').setView([42.7, 25.0], 7);
+  tiles().addTo(routeMap);
+  routeLayer = L.layerGroup().addTo(routeMap);
+  routeMap.on('click', e => addPoint(e.latlng.lat, e.latlng.lng, ''));
+  drawRoute(true);
+}
+function drawRoute(fit = false) {
+  if (routeLayer) {
+    routeLayer.clearLayers();
+    if (pts.length > 1) L.polyline(pts.map(p => [p.lat, p.lon]), { color: '#2196F3', weight: 4, dashArray: '6 6' }).addTo(routeLayer);
+    pts.forEach((p, i) => {
+      const color = i === 0 ? '#4CAF50' : i === pts.length - 1 ? '#F44336' : '#2196F3';
+      const m = L.marker([p.lat, p.lon], { draggable: true, icon: pinIcon(i + 1, color) }).addTo(routeLayer);
+      m.on('dragend', () => { const q = m.getLatLng(); pts[i].lat = q.lat; pts[i].lon = q.lng; saveDraft(); drawRoute(); });
+    });
+    if (fit && pts.length) routeMap.fitBounds(pts.map(p => [p.lat, p.lon]), { padding: [30, 30], maxZoom: 12 });
+  }
+  $('pts').innerHTML = pts.map((p, i) => `<li><span class="n">${i + 1}</span><input data-i="${i}" value="${esc(p.label)}" placeholder="${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}">
+    <button class="b sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button><button class="b sm" data-dn="${i}" ${i < pts.length - 1 ? '' : 'disabled'}>↓</button><button class="b sm warn" data-del="${i}">✕</button></li>`).join('');
+  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · около ${Math.round(straightKm(pts))} км по права линия (по пътя е повече)` : 'Сложи поне 2 точки: тръгване и цел.';
+}
+function addPoint(lat, lon, label) {
+  if (pts.length >= 25) { toast('Най-много 25 точки'); return; }
+  pts.push({ lat, lon, label }); saveDraft(); drawRoute();
+}
+$('pts').oninput = e => { const i = e.target.dataset.i; if (i != null) { pts[i].label = e.target.value; saveDraft(); } };
+$('pts').onclick = e => {
+  const t = e.target, up = t.dataset.up, dn = t.dataset.dn, del = t.dataset.del;
+  if (up != null) [pts[up - 1], pts[up]] = [pts[up], pts[up - 1]];
+  else if (dn != null) [pts[+dn + 1], pts[dn]] = [pts[dn], pts[+dn + 1]];
+  else if (del != null) pts.splice(del, 1);
+  else return;
+  saveDraft(); drawRoute();
+};
+async function searchPlace() {
+  const q = $('search').value.trim(); if (q.length < 2) return;
+  $('found').innerHTML = '<li class="muted">търся…</li>';
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=6&accept-language=bg&q=${encodeURIComponent(q)}`);
+    const list = await res.json();
+    $('found').innerHTML = list.length ? list.map(x => `<li data-lat="${x.lat}" data-lon="${x.lon}" data-name="${esc(x.display_name.split(',').slice(0, 2).join(','))}">${esc(x.display_name)}</li>`).join('') : '<li class="muted">Нищо не намерих</li>';
+  } catch { $('found').innerHTML = '<li class="muted">Търсенето не работи без интернет</li>'; }
+}
+$('searchBtn').onclick = searchPlace;
+// координати, копирани от Google Maps („42.337, 23.553“)
+$('coordsBtn').onclick = () => {
+  const m = $('coords').value.match(/(-?\d{1,2}(?:\.\d+)?)\s*[,; ]\s*(-?\d{1,3}(?:\.\d+)?)/);
+  const lat = m ? +m[1] : NaN, lon = m ? +m[2] : NaN;
+  if (!m || Math.abs(lat) > 90 || Math.abs(lon) > 180) { toast('Не разбрах координатите — пример: 42.337, 23.553'); return; }
+  addPoint(lat, lon, ''); $('coords').value = '';
+  routeMap && routeMap.setView([lat, lon], 11);
+};
+$('coords').onkeydown = e => { if (e.key === 'Enter') $('coordsBtn').click(); };
+$('search').onkeydown = e => { if (e.key === 'Enter') searchPlace(); };
+$('found').onclick = e => {
+  const li = e.target.closest('li[data-lat]'); if (!li) return;
+  addPoint(+li.dataset.lat, +li.dataset.lon, li.dataset.name);
+  routeMap && routeMap.setView([+li.dataset.lat, +li.dataset.lon], 11);
+  $('found').innerHTML = ''; $('search').value = '';
+};
+function currentRoute() { return cleanRoute({ name: $('rName').value.trim(), notes: $('rNotes').value.trim(), waypoints: pts }); }
+function routeLink(r) { const base = location.href.replace(/[#?].*$/, '').replace(/boss\.html$/, ''); return `${base}index.html#route=${encodeRoute(r)}`; }
+$('shareRoute').onclick = () => {
+  const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; }
+  $('routeErr').textContent = '';
+  const link = routeLink(r);
+  shareText(`Маршрут: ${r.name}\n${link}`, link);
+};
+$('previewRoute').onclick = () => { const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; } window.open(googleMapsLinks(r.waypoints, { fromHere: false })[0], '_blank', 'noopener'); };
+$('clearRoute').onclick = () => { if (!pts.length || confirm('Да изчистя точките?')) { pts = []; $('rName').value = ''; $('rNotes').value = ''; saveDraft(); drawRoute(); } };
+$('sendRoute').onclick = async () => {
+  const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; }
+  const driver_id = +$('rDriver').value || null;
+  if (!driver_id) { $('routeErr').textContent = 'Избери шофьор (или „Сподели връзка“)'; return; }
+  $('routeErr').textContent = '';
+  try {
+    await api('/api/routes', { method: 'POST', body: { ...r, driver_id } });
+    toast('Изпратено. Шофьорът ще го види при следващата връзка (до минута).');
+    loadRoutes();
+  } catch (e) { $('routeErr').textContent = e.message; }
+};
+const RST = { new: 'чака', seen: 'видян', done: 'минат', cancelled: 'отменен' };
+async function loadRoutes() {
+  if (!S.token) return;
+  try {
+    const out = await api('/api/routes');
+    const name = id => S.drivers.find(d => d.id === id)?.name || '—';
+    $('sentRoutes').innerHTML = out.routes.length ? out.routes.slice(0, 20).map(r => `<div class="card"><b>${esc(r.name)}</b> <span class="badge">${RST[r.status] || r.status}</span>
+      <div class="muted">${esc(name(r.driver_id))} · ${r.waypoints.length} точки · ${esc(clock(r.created_at, { timeZone: TZ }))}</div>
+      <div class="acts"><button class="b sm" data-load="${r.id}">Отвори</button>${r.status !== 'cancelled' && r.status !== 'done' ? `<button class="b sm warn" data-cancel="${r.id}">Отмени</button>` : ''}</div></div>`).join('') : 'Още няма.';
+    $('sentRoutes').onclick = async e => {
+      const id = e.target.dataset.load || e.target.dataset.cancel; if (!id) return;
+      const r = out.routes.find(x => x.id == id);
+      if (e.target.dataset.load) { pts = r.waypoints.map(p => ({ ...p })); $('rName').value = r.name; $('rNotes').value = r.notes; saveDraft(); drawRoute(true); window.scrollTo({ top: 0 }); }
+      else if (confirm('Да отменя маршрута?')) { await api(`/api/routes/${id}`, { method: 'PATCH', body: { status: 'cancelled' } }); loadRoutes(); }
+    };
+  } catch (e) { $('sentRoutes').textContent = e.message; }
+}
+function fillDriverSelects() {
+  const opts = S.drivers.filter(d => d.active).map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+  const keep = [$('rDriver').value, $('cDriver').value];
+  $('rDriver').innerHTML = '<option value="">— избери —</option>' + opts;
+  $('cDriver').innerHTML = opts || '<option value="">няма шофьори</option>';
+  if (keep[0]) $('rDriver').value = keep[0];
+  if (keep[1]) $('cDriver').value = keep[1];
+}
+
+// ───────── календар и история ─────────
+let weekOffset = 0;
+function weekStartLocal(offset) {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  const dow = (d.getDay() + 6) % 7; // понеделник = 0
+  d.setDate(d.getDate() - dow + 7 * offset);
+  return d;
+}
+const hm = ms => { const m = Math.floor(ms / MIN); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`; };
+const DN = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'нд'];
+$('prevWeek').onclick = () => { weekOffset--; renderCalendar(); };
+$('nextWeek').onclick = () => { if (weekOffset < 0) { weekOffset++; renderCalendar(); } };
+$('cDriver').onchange = () => renderCalendar();
+async function renderCalendar() {
+  const d = S.drivers.find(x => x.id == $('cDriver').value) || S.drivers[0];
+  const ws = weekStartLocal(weekOffset), we = new Date(ws); we.setDate(ws.getDate() + 7);
+  const fmtD = x => `${x.getDate()}.${String(x.getMonth() + 1).padStart(2, '0')}`;
+  $('weekLabel').textContent = `${fmtD(ws)} – ${fmtD(new Date(we - 1))}`;
+  $('nextWeek').disabled = weekOffset >= 0;
+  if (!d) { $('days').innerHTML = '<div class="card muted">Няма шофьори.</div>'; $('weekSum').textContent = ''; return; }
+  $('days').innerHTML = '<div class="card muted">Зареждам…</div>';
+  try {
+    const now = Date.now(), from = ws.getTime(), to = Math.min(we.getTime(), now);
+    const [actsOut, shiftsOut] = await Promise.all([
+      api(`/api/drivers/${d.id}/activities?since=${from - 14 * DAY}&until=${we.getTime()}`),
+      api(`/api/drivers/${d.id}/shifts?from_day=${dayKey(from)}&to_day=${dayKey(we.getTime() - 1)}`)
+    ]);
+    const acts = actsOut.activities.map(a => ({ ...a, end: a.end ?? (weekOffset === 0 ? null : Math.min(now, we.getTime())) }));
+    const shifts = Object.fromEntries(shiftsOut.shifts.map(s => [s.day, s.data]));
+    let viol = [];
+    try { viol = analyze(acts, { ...optsFor(d, to), now: to }).violations; } catch (e) { console.error(e); }
+    let sumDrive = 0, sumWork = 0, html = '';
+    for (let i = 0; i < 7; i++) {
+      const a = new Date(ws); a.setDate(ws.getDate() + i);
+      const b = new Date(a); b.setDate(a.getDate() + 1);
+      const ds = a.getTime(), de = Math.min(b.getTime(), now);
+      if (ds > now) { html += `<div class="card day muted"><div class="h"><span>${DN[i]} ${fmtD(a)}</span></div></div>`; continue; }
+      const t = totals(acts, ds, de);
+      sumDrive += t.drive; sumWork += t.work;
+      const v = viol.filter(x => x.at >= ds && x.at < b.getTime());
+      const segs = acts.filter(x => x.start < de && (x.end ?? now) > ds).map(x => {
+        const s = Math.max(x.start, ds), e = Math.min(x.end ?? now, de);
+        return `<span class="${x.type}" style="left:${(s - ds) / DAY * 100}%; width:${(e - s) / DAY * 100}%"></span>`;
+      }).join('');
+      const sh = shifts[dayKey(ds)];
+      const list = acts.filter(x => x.start < de && (x.end ?? now) > ds).map(x => {
+        const s = Math.max(x.start, ds), e = Math.min(x.end ?? now, de);
+        const tt = y => new Date(y).toTimeString().slice(0, 5);
+        return `${tt(s)}–${tt(e)} ${ACT[x.type]}${x.manual ? ' ✍️ ръчно' : ''}${x.ferry ? ' 🚢' : ''}`;
+      }).join('<br>');
+      html += `<div class="card day"><div class="h"><span>${DN[i]} ${fmtD(a)}</span><span>${t.drive ? '🚚 ' + hm(t.drive) : ''} ${t.work ? '🔨 ' + hm(t.work) : ''}</span></div>
+        <div class="bar">${segs}</div>
+        ${sh ? `<div class="muted">смяна ${esc(sh.start || '?')}–${esc(sh.end || '…')}${sh.dist ? ` · ${Number(sh.dist).toFixed(0)} км` : ''}${sh.locStart ? ` · ${esc(sh.locStart)}` : ''}${sh.locEnd ? ` → ${esc(sh.locEnd)}` : ''}</div>` : ''}
+        ${v.map(x => `<div class="viol">❌ ${esc(VIOL(x.code))} (${esc(x.article)})</div>`).join('')}
+        <div class="detail">${list || 'Няма записи.'}${t.manual ? '<div style="color:#b388ff">⚠️ Има ръчно въведено време</div>' : ''}${sh && sh.notes ? `<div>📝 ${esc(sh.notes)}</div>` : ''}</div></div>`;
+    }
+    $('days').innerHTML = html;
+    $('weekSum').textContent = `Седмица: каране ${hm(sumDrive)} от 56:00, работа ${hm(sumWork)}. Докосни ден за подробности.`;
+    $('days').onclick = e => { const c = e.target.closest('.day'); if (c) c.classList.toggle('open'); };
+  } catch (e) { $('days').innerHTML = `<div class="card muted">${esc(e.message)}</div>`; }
+}
+
+// ───────── помощни ─────────
+async function copy(text) { try { await navigator.clipboard.writeText(text); toast('Копирано'); } catch { prompt('Копирай:', text); } }
+async function shareText(text, link) {
+  if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  copy(link);
+}
+
+// ───────── старт ─────────
+async function start() {
+  if (!S.server && location.protocol.startsWith('http')) {
+    try { const r = await fetch(location.origin + '/api/health'); if (r.ok) { S.server = location.origin; } } catch {}
+  }
+  $('loginForm').server.value = S.server;
+  initRouteMap(); drawRoute(true);
+  if (S.token) {
+    try { const me = await api('/api/me'); S.user = me.user; S.company = me.company; }
+    catch { if (!S.token) { applyMode(); show('login'); return; } }
+    applyMode(); show('drivers'); await loadDrivers(true); loadRoutes();
+  } else { applyMode(); show('login'); }
+  setInterval(() => { if (S.token && document.visibilityState === 'visible') loadDrivers(); }, 30_000);
+  setInterval(() => { if (S.token && $('drivers').classList.contains('on')) renderDrivers(); }, 10_000);
+}
+start();
+</script>
+</body>
+</html>

@@ -2,8 +2,8 @@
 // Първо се опитва да вземе новата версия от интернет и я записва в кеша.
 // Само ако няма връзка, отваря запазеното копие. Така шофьорите винаги
 // получават обновленията, а без обхват приложението пак работи.
-const CACHE_NAME = 'tacho-pro-v3';
-const urlsToCache = ['./', './index.html', './manifest.json', './engine/tacho-rules.js', './engine/activity-log.js', './engine/overspeed.js'];
+const CACHE_NAME = 'tacho-pro-v4';
+const urlsToCache = ['./', './index.html', './manifest.json', './engine/tacho-rules.js', './engine/activity-log.js', './engine/overspeed.js', './engine/route.js', './engine/sync.js', './boss.html', './vendor/leaflet-1.9.4/leaflet.js', './vendor/leaflet-1.9.4/leaflet.css'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache)));
