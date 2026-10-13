@@ -44,13 +44,13 @@ DATABASE_URL=postgresql+psycopg://taho:taho@127.0.0.1:5432/taho WEB_ROOT=.. uvic
 # Docker: https://docs.docker.com/engine/install/ubuntu/
 git clone https://github.com/Pstoev503/truck-tacho-app.git
 cd truck-tacho-app/server/deploy
-cp .env.example .env        # попълни DOMAIN, DB_PASSWORD, REGISTRATION_CODE
+cp .env.example .env        # попълни DOMAIN, DB_PASSWORD (openssl rand -hex 32), REGISTRATION_CODE
 docker compose up -d
 ```
 
 Caddy взима HTTPS сертификат сам. Готово е, когато `https://ДОМЕЙН/api/health` отговори с `{"ok":true}`.
 
-Шефското меню е на `https://ДОМЕЙН/boss.html`. Приложението на шофьора е на `https://ДОМЕЙН/` или на GitHub Pages — връзката за покана носи адреса на сървъра.
+Шефското меню е на `https://ДОМЕЙН/boss.html`, а приложението на шофьора — на `https://ДОМЕЙН/`. Най-добре е шофьорите да ползват приложението от домейна на сървъра, а не от GitHub Pages: на собствения домейн входът е само за това приложение. Ако шофьорите вече имат приложението от друго място, сложи адреса му в шефското меню (⚙ → „Адрес на приложението за шофьорите“) — поканите и маршрутите ще водят там.
 
 Обновяване: `git pull && docker compose up -d --build`.
 

@@ -11,10 +11,14 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, select, update
+import json
+
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.orm import Session
 
 from .db import Base, engine, get_db
@@ -24,7 +28,10 @@ from .security import (Throttle, fingerprint, hash_password, new_invite_code, ne
 
 DAY_MS = 24 * 3600 * 1000
 INVITE_DAYS = 7
-MAX_ACTIVITIES_PER_SYNC = 5000
+MAX_ACTIVITIES_PER_SYNC = 20000
+MAX_TS = 4_102_444_800_000  # 2100 г.
+MAX_BODY = 5 * 1024 * 1024
+HISTORY_LIMIT_MS = 45 * DAY_MS  # телефонът пази 35 дни; по-старото на сървъра не се пипа
 TYPES = ("drive", "work", "avail", "rest")
 
 
@@ -42,6 +49,22 @@ origins = [o.strip() for o in os.environ.get(
     "https://pstoev503.github.io,http://localhost:8765,http://127.0.0.1:8765,http://localhost:8000,http://127.0.0.1:8000",
 ).split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def limit_body(request: Request, call_next):
+    # заявки над 5 MB не се приемат
+    size = request.headers.get("content-length")
+    if size and size.isdigit() and int(size) > MAX_BODY:
+        return JSONResponse({"detail": "Заявката е твърде голяма"}, status_code=413)
+    return await call_next(request)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(_request: Request, exc: RequestValidationError):
+    # без да връщаме обратно полученото (може да е NaN или огромно)
+    errors = [{"loc": [str(x) for x in e.get("loc", ())], "msg": str(e.get("msg", ""))} for e in exc.errors()]
+    return JSONResponse({"detail": "Невалидни данни", "errors": errors[:20]}, status_code=422)
 
 login_throttle = Throttle(max_attempts=8, window_s=15 * 60)
 join_throttle = Throttle(max_attempts=10, window_s=15 * 60)
@@ -134,8 +157,8 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
 
 
 class LoginIn(BaseModel):
-    email: str
-    password: str
+    email: str = Field(max_length=200)
+    password: str = Field(max_length=200)
 
 
 @app.post("/api/owner/login")
@@ -157,8 +180,13 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
 @app.post("/api/logout")
 def logout(authorization: str = Header(default=""), db: Session = Depends(get_db)):
     if authorization.lower().startswith("bearer "):
-        db.execute(update(AuthToken).where(AuthToken.token_hash == fingerprint(authorization[7:].strip())).values(revoked=True))
-        db.commit()
+        tok = db.scalar(select(AuthToken).where(AuthToken.token_hash == fingerprint(authorization[7:].strip())))
+        if tok:
+            tok.revoked = True
+            u = db.get(User, tok.user_id)
+            if u and u.role == "driver":
+                u.position_json = None  # изключен телефон: шефът не вижда къде е
+            db.commit()
     return {"ok": True}
 
 
@@ -309,30 +337,46 @@ def join(body: JoinIn, request: Request, db: Session = Depends(get_db)):
 
 class ActivityIn(BaseModel):
     type: Literal["drive", "work", "avail", "rest"]
-    start: int
-    end: int | None = None
+    start: int = Field(ge=0, le=MAX_TS)
+    end: int | None = Field(default=None, ge=0, le=MAX_TS)
     ferry: bool = False
     manual: bool = False
 
 
 class PositionIn(BaseModel):
-    lat: float = Field(ge=-90, le=90)
-    lon: float = Field(ge=-180, le=180)
-    speed: float | None = None
-    accuracy: float | None = None
-    at: int
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lon: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    speed: float | None = Field(default=None, ge=0, le=300, allow_inf_nan=False)
+    accuracy: float | None = Field(default=None, ge=0, le=100000, allow_inf_nan=False)
+    at: int = Field(ge=0, le=MAX_TS)
+
+
+def small_dict(v: dict | None, limit: int) -> dict | None:
+    if v is not None and len(json.dumps(v, ensure_ascii=False, allow_nan=False)) > limit:
+        raise ValueError("Твърде много данни")
+    return v
 
 
 class ShiftIn(BaseModel):
     day: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     data: dict
 
+    @field_validator("data")
+    @classmethod
+    def data_size(cls, v: dict) -> dict:
+        return small_dict(v, 16_000)
+
 
 class SyncIn(BaseModel):
     # от кой момент нататък дневникът се заменя с изпратения (най-ранното начало в него)
-    window_start: int | None = None
+    window_start: int | None = Field(default=None, ge=0, le=MAX_TS)
     activities: list[ActivityIn] = Field(default_factory=list, max_length=MAX_ACTIVITIES_PER_SYNC)
     status: dict | None = None
+
+    @field_validator("status")
+    @classmethod
+    def status_size(cls, v: dict | None) -> dict | None:
+        return small_dict(v, 8_000)
     share_location: bool | None = None
     position: PositionIn | None = None
     shifts: list[ShiftIn] = Field(default_factory=list, max_length=60)
@@ -346,6 +390,8 @@ def routes_for_driver(db: Session, d: User) -> list[dict]:
 
 @app.put("/api/sync")
 def sync(body: SyncIn, me: User = Depends(driver), db: Session = Depends(get_db)):
+    # едновременни синхронизации на един шофьор се редят една след друга
+    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": me.id})
     t = now_ms()
     acts = body.activities
     for a in acts:
@@ -353,10 +399,20 @@ def sync(body: SyncIn, me: User = Depends(driver), db: Session = Depends(get_db)
             raise HTTPException(422, "Запис с край преди началото")
         if a.start > t + 5 * 60_000:
             raise HTTPException(422, "Запис в бъдещето — провери часовника на телефона")
+    open_acts = [a for a in acts if a.end is None]
+    if len(open_acts) > 1 or (open_acts and open_acts[0].start < max(a.start for a in acts)):
+        raise HTTPException(422, "Само последният запис може да е отворен")
     if acts:
         window = body.window_start if body.window_start is not None else min(a.start for a in acts)
         if any(a.start < window for a in acts):
             raise HTTPException(422, "Запис преди началото на прозореца")
+        if window < t - HISTORY_LIMIT_MS:
+            raise HTTPException(422, "Прозорецът е твърде стар — историята на сървъра не се пипа")
+        # запис отпреди прозореца, който е останал отворен или влиза в него (телефонът
+        # е бил дълго без връзка), свършва в началото на прозореца
+        db.execute(update(Activity).where(
+            Activity.driver_id == me.id, Activity.start < window,
+            (Activity.end.is_(None)) | (Activity.end > window)).values(end=window))
         # заменяме дневника от прозореца нататък; по-старото остава за историята
         db.execute(delete(Activity).where(Activity.driver_id == me.id, Activity.start >= window))
         db.add_all([Activity(driver_id=me.id, type=a.type, start=a.start, end=a.end, ferry=a.ferry and a.type == "rest",
@@ -369,6 +425,8 @@ def sync(body: SyncIn, me: User = Depends(driver), db: Session = Depends(get_db)
         me.position_json = body.position.model_dump()
     if body.status is not None:
         me.status_json = body.status
+        if body.status.get("activity") == "rest":
+            me.position_json = None  # в почивка шефът не вижда къде е
     for s in body.shifts:
         row = db.scalar(select(Shift).where(Shift.driver_id == me.id, Shift.day == s.day))
         if row:
@@ -449,6 +507,8 @@ def patch_route(route_id: int, body: RoutePatch, user: User = Depends(current_us
         if body.status not in ("seen", "done") or any(
                 v is not None for v in (body.name, body.waypoints, body.notes, body.driver_id)):
             raise HTTPException(403, "Шофьорът може само да отбележи маршрута като видян или минат")
+        if r.status == "cancelled":
+            raise HTTPException(409, "Маршрутът е отменен от шефа")
         r.status = body.status
     else:
         if body.driver_id is not None:

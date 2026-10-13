@@ -9,6 +9,11 @@ services:
       POSTGRES_DB: taho
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taho -d taho"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
   api:
@@ -19,8 +24,11 @@ services:
       DATABASE_URL: postgresql+psycopg://taho:${DB_PASSWORD}@db:5432/taho
       ALLOWED_ORIGINS: https://pstoev503.github.io,https://${DOMAIN}
       REGISTRATION_CODE: ${REGISTRATION_CODE:-}
+      # до сървъра стига само Caddy (портът не е отворен навън), затова вярваме на заглавката му
+      FORWARDED_ALLOW_IPS: "*"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   caddy:

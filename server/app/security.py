@@ -48,8 +48,12 @@ def new_invite_code() -> str:
     return "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
 
 
+# кирилски букви, които изглеждат като латински (код, набран на българска клавиатура)
+LOOKALIKE = str.maketrans("АВЕКМНОРСТХУ", "ABEKMHOPCTXY")
+
+
 def normalize_code(code: str) -> str:
-    return "".join(ch for ch in code.upper() if ch.isalnum())
+    return "".join(ch for ch in code.upper().translate(LOOKALIKE) if ch.isascii() and ch.isalnum())
 
 
 class Throttle:
@@ -61,6 +65,8 @@ class Throttle:
 
     def blocked(self, key: str) -> bool:
         t = time.time()
+        if len(self.hits) > 10_000:  # паметта не расте безкрайно
+            self.hits = {k: v for k, v in self.hits.items() if v and t - v[-1] < self.window}
         recent = [x for x in self.hits.get(key, []) if t - x < self.window]
         self.hits[key] = recent
         return len(recent) >= self.max

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { encodeRoute, decodeRoute, parseHash, googleMapsLinks, gpx, straightKm, cleanRoute } from './route.js';
-import { syncPayload, statusSnapshot, dayKey, recentShifts, serverUrl } from './sync.js';
+import { syncPayload, statusSnapshot, dayKey, recentShifts, serverUrl, normalizeCode } from './sync.js';
 import { switchTo, addManual } from './activity-log.js';
 import { analyze } from './tacho-rules.js';
 
@@ -76,7 +76,7 @@ test('изпраща само последните 3 дни и откъде да
   assert.deepEqual(p.activities.map(a => a.type), ['rest', 'drive', 'rest']);
   // дългата почивка от преди 6 дни свърши вчера, затова и тя влиза — от нейното начало
   assert.equal(p.window_start, T0 - 6 * DAY + 4 * H);
-  assert.equal(syncPayload(log, T0, true).activities.length, 4);
+  assert.equal(syncPayload(log, T0, -Infinity).activities.length, 4);
 });
 
 test('ръчният запис се изпраща с отметка', () => {
@@ -105,8 +105,47 @@ test('смените от отчета получават ключ ГГГГ-ММ
   assert.equal(dayKey(new Date(2026, 0, 5, 23, 30).getTime()), '2026-01-05');
 });
 
-test('адресът на сървъра се почиства', () => {
+test('адресът на сървъра се почиства; http само за този компютър', () => {
   assert.equal(serverUrl(' https://api.top10.eu/ '), 'https://api.top10.eu');
   assert.equal(serverUrl('javascript:alert(1)'), '');
+  assert.equal(serverUrl('http://evil.example'), '');
+  assert.equal(serverUrl('http://127.0.0.1:8000'), 'http://127.0.0.1:8000');
   assert.equal(serverUrl(''), '');
+});
+
+test('ръчен запис вътре в дълга почивка не се губи на сървъра', () => {
+  // почивка петък 18:00 – понеделник 06:00; в понеделник ръчно: работа събота 10–12
+  const fri18 = T0 - 4 * DAY + 14 * H;
+  let log = switchTo([], 'rest', fri18);
+  log = switchTo(log, 'drive', fri18 + 60 * H);
+  log = addManual(log, { type: 'work', start: fri18 + 16 * H, end: fri18 + 18 * H }, fri18 + 61 * H);
+  // във вторник почивката още е в 3-дневния прозорец, ръчният запис — не
+  const p = syncPayload(log, fri18 + 3 * DAY + 2 * H);
+  assert.equal(p.window_start, fri18);
+  assert.ok(p.activities.some(a => a.manual && a.type === 'work'));
+});
+
+test('след дълго без връзка се изпраща от последната успешна синхронизация', () => {
+  let log = switchTo([], 'drive', T0 - 6 * DAY);
+  log = switchTo(log, 'rest', T0 - 5 * DAY);
+  log = switchTo(log, 'drive', T0 - 4 * DAY);
+  log = switchTo(log, 'rest', T0 - 4 * DAY + 3 * H);
+  const lastOk = T0 - 6 * DAY + H;
+  const p = syncPayload(log, T0, lastOk - H);
+  assert.equal(p.window_start, T0 - 6 * DAY);
+  assert.equal(p.activities.length, 4);
+});
+
+test('прекалено много записи: изпращат се само най-новите', () => {
+  let log = [];
+  for (let i = 0; i < 50; i++) log = switchTo(log, i % 2 ? 'work' : 'drive', T0 + i * 60_000);
+  const p = syncPayload(log, T0 + DAY, -Infinity, 10);
+  assert.equal(p.activities.length, 10);
+  assert.equal(p.window_start, p.activities[0].start);
+  assert.equal(p.activities.at(-1).end, null);
+});
+
+test('код с кирилски букви от българската клавиатура се оправя', () => {
+  assert.equal(normalizeCode('авек-23мн'), 'ABEK23MH');
+  assert.equal(normalizeCode(' abcd-efgh '), 'ABCDEFGH');
 });

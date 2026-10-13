@@ -125,6 +125,7 @@
   <section id="drivers">
     <div id="fleetMap"></div>
     <div class="row" style="margin-bottom:10px"><button class="b pri" id="addDriver">＋ Шофьор</button><button class="b" id="refresh">↻ Обнови</button></div>
+    <div id="inviteBox"></div>
     <div id="driverList"></div>
     <div class="muted" id="driversNote"></div>
   </section>
@@ -171,7 +172,8 @@
     <div class="card">
       <div id="whoami" class="muted">—</div>
       <label class="f">Адрес на сървъра</label><input id="serverInput" inputmode="url">
-      <div class="acts"><button class="b" id="saveServer">Запази адреса</button><button class="b warn" id="logout">Излез</button></div>
+      <label class="f">Адрес на приложението за шофьорите (в поканите и маршрутите)</label><input id="appInput" inputmode="url">
+      <div class="acts"><button class="b" id="saveServer">Запази адресите</button><button class="b warn" id="logout">Излез</button></div>
     </div>
     <div class="card muted">
       Броячите се смятат тук, в браузъра, от дневника, който телефонът на шофьора праща — със същите правила като в кабината (Регламент 561/2006). Ако телефонът не е изпращал отдавна, числата може да не са точни — виж „последна връзка“.
@@ -212,7 +214,7 @@ async function api(path, { method = 'GET', body } = {}) {
   if (res.status === 401 && S.token) { logoutLocal(); }
   if (!res.ok) {
     const d = data && data.detail;
-    throw new Error(typeof d === 'string' ? d : res.status === 422 ? 'Провери полетата (паролата е поне 8 знака, имейлът да е истински)' : `Грешка ${res.status}`);
+    throw new Error(res.status === 422 ? 'Провери полетата (паролата е поне 8 знака, имейлът да е истински, поне 2 точки в маршрута)' : typeof d === 'string' ? d : `Грешка ${res.status}`);
   }
   return data;
 }
@@ -235,6 +237,8 @@ function applyMode() {
   document.querySelectorAll('.server-only').forEach(e => e.style.display = on ? '' : 'none');
   $('coName').textContent = on && S.company ? `${S.company.name} · ${S.user.name}` : (S.routeOnly ? 'само маршрут (без сървър)' : 'не си влязъл');
   $('serverInput').value = S.server;
+  $('appInput').value = store.get('boss_app_url') || '';
+  $('appInput').placeholder = appBase();
   $('whoami').textContent = on && S.user ? `Влязъл: ${S.user.name} (${S.user.email || ''})` : 'Не си влязъл';
 }
 
@@ -262,18 +266,30 @@ $('loginForm').onsubmit = async ev => {
     S.token = out.token; S.user = out.user; S.company = out.company; S.routeOnly = false;
     store.set('boss_token', S.token);
     ev.target.password.value = '';
-    applyMode(); show('drivers'); await loadDrivers(true);
+    applyMode(); show('drivers'); await loadDrivers(true); loadRoutes();
   } catch (e) { $('loginErr').textContent = e.message; }
 };
 $('routeOnly').onclick = () => { S.routeOnly = true; applyMode(); show('route'); };
 function logoutLocal() { S.token = ''; S.user = null; S.company = null; store.set('boss_token', null); applyMode(); show('login'); }
 $('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} logoutLocal(); };
-$('saveServer').onclick = () => { const v = serverUrl($('serverInput').value); if (!v) { toast('Адресът трябва да започва с https://'); return; } S.server = v; store.set('boss_server', v); toast('Запазено'); };
+$('saveServer').onclick = () => {
+  const v = serverUrl($('serverInput').value); if (!v) { toast('Адресът на сървъра трябва да започва с https://'); return; }
+  const a = $('appInput').value.trim();
+  if (a && !/^https?:\/\/\S+$/.test(a)) { toast('Адресът на приложението трябва да започва с https://'); return; }
+  S.server = v; store.set('boss_server', v); store.set('boss_app_url', a || null); toast('Запазено');
+};
+// приложението на шофьорите: по подразбиране същото място като шефското меню
+function appBase() {
+  const saved = (store.get('boss_app_url') || '').trim();
+  if (saved) return saved.replace(/index\.html.*$/, '').replace(/\/?$/, '/');
+  return location.href.replace(/[#?].*$/, '').replace(/boss\.html$/, '');
+}
 
 // ───────── шофьори: жив отчет ─────────
 async function loadActs(d, force = false) {
   const now = Date.now();
-  if (!force && S.acts[d.id] && now - S.actsAt[d.id] < 2 * MIN) return S.acts[d.id];
+  const fresh = S.acts[d.id] && now - S.actsAt[d.id] < 2 * MIN && !(d.last_sync_at > S.actsAt[d.id]);
+  if (!force && fresh) return S.acts[d.id];
   const out = await api(`/api/drivers/${d.id}/activities?since=${now - 35 * DAY}`);
   S.acts[d.id] = out.activities; S.actsAt[d.id] = now;
   return out.activities;
@@ -348,8 +364,7 @@ $('addDriver').onclick = async () => {
   catch (e) { toast(e.message); }
 };
 function inviteLink(code) {
-  const base = location.href.replace(/[#?].*$/, '').replace(/boss\.html$/, '');
-  return `${base}index.html#join=${encodeURIComponent(code)}&server=${encodeURIComponent(S.server)}`;
+  return `${appBase()}index.html#join=${encodeURIComponent(code)}&server=${encodeURIComponent(S.server)}`;
 }
 function showInvite(d, inv) {
   const link = inviteLink(inv.code);
@@ -358,7 +373,7 @@ function showInvite(d, inv) {
   box.innerHTML = `<b>Покана за ${esc(d.name)}</b><div class="code">${esc(inv.code)}</div>
     <div class="muted">Важи до ${esc(clock(inv.expires_at, { timeZone: TZ }))}, еднократно. Прати връзката на шофьора — като я отвори на телефона си, приложението се свързва само.</div>
     <div class="acts"><button class="b ok" data-share>📨 Прати връзката</button><button class="b" data-copy>Копирай</button><button class="b" data-close>Затвори</button></div>`;
-  $('driverList').prepend(box);
+  $('inviteBox').innerHTML = ''; $('inviteBox').appendChild(box);
   box.querySelector('[data-share]').onclick = () => shareText(`Свържи приложението с ${S.company?.name || 'фирмата'}: ${link}`, link);
   box.querySelector('[data-copy]').onclick = () => copy(link);
   box.querySelector('[data-close]').onclick = () => box.remove();
@@ -392,7 +407,8 @@ function renderFleetMap() {
   fleetLayer.clearLayers();
   const ll = withPos.map(d => [d.position.lat, d.position.lon]);
   withPos.forEach(d => L.marker([d.position.lat, d.position.lon], { icon: pinIcon('🚚', 'var(--green)') }).bindPopup(`${esc(d.name)}<br>${ago(d.position.at)}`).addTo(fleetLayer));
-  fleetMap.fitBounds(ll, { padding: [30, 30], maxZoom: 11 });
+  const key = withPos.map(d => d.id).join(',');
+  if (key !== renderFleetMap.key) { renderFleetMap.key = key; fleetMap.fitBounds(ll, { padding: [30, 30], maxZoom: 11 }); }
 }
 
 // ───────── маршрут ─────────
@@ -465,7 +481,7 @@ $('found').onclick = e => {
   $('found').innerHTML = ''; $('search').value = '';
 };
 function currentRoute() { return cleanRoute({ name: $('rName').value.trim(), notes: $('rNotes').value.trim(), waypoints: pts }); }
-function routeLink(r) { const base = location.href.replace(/[#?].*$/, '').replace(/boss\.html$/, ''); return `${base}index.html#route=${encodeRoute(r)}`; }
+function routeLink(r) { return `${appBase()}index.html#route=${encodeRoute(r)}`; }
 $('shareRoute').onclick = () => {
   const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; }
   $('routeErr').textContent = '';
@@ -504,9 +520,10 @@ async function loadRoutes() {
 }
 function fillDriverSelects() {
   const opts = S.drivers.filter(d => d.active).map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+  const all = S.drivers.map(d => `<option value="${d.id}">${esc(d.name)}${d.active ? '' : ' (спрян)'}</option>`).join('');
   const keep = [$('rDriver').value, $('cDriver').value];
   $('rDriver').innerHTML = '<option value="">— избери —</option>' + opts;
-  $('cDriver').innerHTML = opts || '<option value="">няма шофьори</option>';
+  $('cDriver').innerHTML = all || '<option value="">няма шофьори</option>';
   if (keep[0]) $('rDriver').value = keep[0];
   if (keep[1]) $('cDriver').value = keep[1];
 }
@@ -546,14 +563,14 @@ async function renderCalendar() {
     for (let i = 0; i < 7; i++) {
       const a = new Date(ws); a.setDate(ws.getDate() + i);
       const b = new Date(a); b.setDate(a.getDate() + 1);
-      const ds = a.getTime(), de = Math.min(b.getTime(), now);
+      const ds = a.getTime(), de = Math.min(b.getTime(), now), dayLen = b.getTime() - ds; // 23 или 25 ч при смяна на часа
       if (ds > now) { html += `<div class="card day muted"><div class="h"><span>${DN[i]} ${fmtD(a)}</span></div></div>`; continue; }
       const t = totals(acts, ds, de);
       sumDrive += t.drive; sumWork += t.work;
       const v = viol.filter(x => x.at >= ds && x.at < b.getTime());
       const segs = acts.filter(x => x.start < de && (x.end ?? now) > ds).map(x => {
         const s = Math.max(x.start, ds), e = Math.min(x.end ?? now, de);
-        return `<span class="${x.type}" style="left:${(s - ds) / DAY * 100}%; width:${(e - s) / DAY * 100}%"></span>`;
+        return `<span class="${x.type}" style="left:${(s - ds) / dayLen * 100}%; width:${(e - s) / dayLen * 100}%"></span>`;
       }).join('');
       const sh = shifts[dayKey(ds)];
       const list = acts.filter(x => x.start < de && (x.end ?? now) > ds).map(x => {
@@ -568,7 +585,7 @@ async function renderCalendar() {
         <div class="detail">${list || 'Няма записи.'}${t.manual ? '<div style="color:#b388ff">⚠️ Има ръчно въведено време</div>' : ''}${sh && sh.notes ? `<div>📝 ${esc(sh.notes)}</div>` : ''}</div></div>`;
     }
     $('days').innerHTML = html;
-    $('weekSum').textContent = `Седмица: каране ${hm(sumDrive)} от 56:00, работа ${hm(sumWork)}. Докосни ден за подробности.`;
+    $('weekSum').textContent = `За тези 7 дни: каране ${hm(sumDrive)}, работа ${hm(sumWork)}. Седмицата по регламента (56 ч) се брои от понеделник 00:00 по UTC — виж „Шофьори“. Докосни ден за подробности.`;
     $('days').onclick = e => { const c = e.target.closest('.day'); if (c) c.classList.toggle('open'); };
   } catch (e) { $('days').innerHTML = `<div class="card muted">${esc(e.message)}</div>`; }
 }
@@ -587,13 +604,13 @@ async function start() {
   }
   $('loginForm').server.value = S.server;
   initRouteMap(); drawRoute(true);
+  setInterval(() => { if (S.token && document.visibilityState === 'visible') loadDrivers(); }, 30_000);
+  setInterval(() => { if (S.token && $('drivers').classList.contains('on')) renderDrivers(); }, 10_000);
   if (S.token) {
     try { const me = await api('/api/me'); S.user = me.user; S.company = me.company; }
     catch { if (!S.token) { applyMode(); show('login'); return; } }
     applyMode(); show('drivers'); await loadDrivers(true); loadRoutes();
   } else { applyMode(); show('login'); }
-  setInterval(() => { if (S.token && document.visibilityState === 'visible') loadDrivers(); }, 30_000);
-  setInterval(() => { if (S.token && $('drivers').classList.contains('on')) renderDrivers(); }, 10_000);
 }
 start();
 </script>

@@ -6,18 +6,29 @@
 // началото на прозореца нататък, а по-старите пази за историята.
 
 export const SYNC_WINDOW_MS = 3 * 24 * 3600 * 1000;
+export const MAX_ENTRIES = 15000; // сървърът приема до 20 000 записа наведнъж
 
-/** Записите за изпращане и откъде сървърът да ги замени. full: целият дневник. */
-export function syncPayload(log, now = Date.now(), full = false) {
-  const activities = (full ? log : log.filter(e => e.end == null || e.end >= now - SYNC_WINDOW_MS))
-    .map(e => {
-      const x = { type: e.type, start: e.start, end: e.end ?? null };
-      if (e.ferry) x.ferry = true;
-      if (e.manual) x.manual = true;
-      return x;
-    });
-  const window_start = activities.length ? Math.min(...activities.map(a => a.start)) : null;
-  return { window_start, activities };
+/**
+ * Записите за изпращане и откъде сървърът да ги замени.
+ * from: най-ранният момент, от който сървърът трябва да се обнови (ръчен запис
+ * назад във времето, дълго без връзка, ново свързване: -Infinity = всичко).
+ * Изпраща се всичко, което започва след началото на прозореца — и старите
+ * ръчни записи вътре в дълга почивка, за да не ги изтрие сървърът.
+ */
+export function syncPayload(log, now = Date.now(), from = null, maxEntries = MAX_ENTRIES) {
+  const cutoff = Math.min(now - SYNC_WINDOW_MS, from ?? Infinity);
+  const recent = log.filter(e => e.end == null || e.end >= cutoff);
+  if (!recent.length) return { window_start: null, activities: [] };
+  const window = Math.min(...recent.map(e => e.start));
+  let send = log.filter(e => e.start >= window);
+  if (send.length > maxEntries) send = send.slice(-maxEntries); // твърде много: само най-новите
+  const activities = send.map(e => {
+    const x = { type: e.type, start: e.start, end: e.end ?? null };
+    if (e.ferry) x.ferry = true;
+    if (e.manual) x.manual = true;
+    return x;
+  });
+  return { window_start: activities[0].start, activities };
 }
 
 /**
@@ -61,8 +72,18 @@ export function recentShifts(history, now = Date.now(), days = 7) {
   return out.sort((a, b) => a.day.localeCompare(b.day));
 }
 
-/** Нормализира адреса на сървъра: без / накрая, само http(s). */
+/** Нормализира адреса на сървъра: без / накрая; https, а http само за този компютър. */
 export function serverUrl(s) {
   const v = String(s || '').trim().replace(/\/+$/, '');
-  return /^https?:\/\/[^\s/]+/.test(v) ? v : '';
+  if (/^https:\/\/[^\s/]+/.test(v)) return v;
+  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(v)) return v;
+  return '';
+}
+
+// кирилски букви, които изглеждат като латински (код, набран на българска клавиатура)
+const LOOKALIKE = { А: 'A', В: 'B', Е: 'E', К: 'K', М: 'M', Н: 'H', О: 'O', Р: 'P', С: 'C', Т: 'T', Х: 'X', У: 'Y' };
+
+/** Кодът за покана: главни латински букви и цифри, без тирета и интервали. */
+export function normalizeCode(code) {
+  return String(code || '').toUpperCase().replace(/[А-ЯЁ]/g, ch => LOOKALIKE[ch] || ch).replace(/[^A-Z0-9]/g, '');
 }

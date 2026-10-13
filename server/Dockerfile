@@ -8,7 +8,8 @@ COPY server/app /app/server/app
 COPY index.html boss.html manifest.json sw.js /app/web/
 COPY engine /app/web/engine
 COPY vendor /app/web/vendor
-ENV WEB_ROOT=/app/web PYTHONUNBUFFERED=1
+# X-Forwarded-For се вярва само от посочените адреси (в docker compose — от Caddy)
+ENV WEB_ROOT=/app/web PYTHONUNBUFFERED=1 FORWARDED_ALLOW_IPS=127.0.0.1
 WORKDIR /app/server
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

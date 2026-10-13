@@ -5,6 +5,7 @@
 """
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,9 @@ from app import main  # noqa: E402
 from app.db import Base, engine  # noqa: E402
 
 H = 3600_000
+DAY = 24 * H
+NOW = int(time.time() * 1000)
+T0 = NOW - 2 * DAY  # записите в тестовете са от преди 2 дни
 
 
 @pytest.fixture()
@@ -128,7 +132,7 @@ def test_sync_replaces_window_and_keeps_history(client):
     out = add_driver(client, boss)
     did = out["driver"]["id"]
     drv = join(client, out["invite"]["code"])
-    t0 = 1_760_000_000_000
+    t0 = T0
     first = [{"type": "drive", "start": t0, "end": t0 + H}, {"type": "rest", "start": t0 + H, "end": t0 + 2 * H},
              {"type": "work", "start": t0 + 2 * H, "end": None}]
     r = client.put("/api/sync", json={"activities": first, "status": {"driveRemaining": 123}}, headers=auth(drv))
@@ -148,7 +152,7 @@ def test_sync_replaces_window_and_keeps_history(client):
 def test_sync_validation(client):
     boss = register(client)
     drv = join(client, add_driver(client, boss)["invite"]["code"])
-    t0 = 1_760_000_000_000
+    t0 = T0
     bad_order = [{"type": "drive", "start": t0, "end": t0 - 1}]
     assert client.put("/api/sync", json={"activities": bad_order}, headers=auth(drv)).status_code == 422
     future = [{"type": "drive", "start": 9_999_999_999_999, "end": None}]
@@ -162,7 +166,7 @@ def test_sync_validation(client):
 def test_location_only_when_driver_shares(client):
     boss = register(client)
     drv = join(client, add_driver(client, boss)["invite"]["code"])
-    pos = {"lat": 42.33, "lon": 23.55, "speed": 80, "at": 1_760_000_000_000}
+    pos = {"lat": 42.33, "lon": 23.55, "speed": 80, "at": T0}
     client.put("/api/sync", json={"position": pos}, headers=auth(drv))
     assert client.get("/api/drivers", headers=auth(boss)).json()["drivers"][0]["position"] is None
     client.put("/api/sync", json={"share_location": True, "position": pos}, headers=auth(drv))
@@ -229,3 +233,71 @@ def test_logout(client):
     boss = register(client)
     assert client.post("/api/logout", headers=auth(boss)).status_code == 200
     assert client.get("/api/me", headers=auth(boss)).status_code == 401
+
+
+def test_stale_open_entry_is_closed_after_long_offline(client):
+    """Телефонът е бил 5 дни без връзка: старият отворен запис на сървъра се затваря."""
+    boss = register(client)
+    out = add_driver(client, boss)
+    did, drv = out["driver"]["id"], join(client, out["invite"]["code"])
+    old = NOW - 5 * DAY
+    client.put("/api/sync", json={"activities": [{"type": "drive", "start": old, "end": None}]}, headers=auth(drv))
+    recent = [{"type": "rest", "start": NOW - 2 * DAY, "end": NOW - DAY}, {"type": "work", "start": NOW - DAY, "end": None}]
+    assert client.put("/api/sync", json={"activities": recent}, headers=auth(drv)).status_code == 200
+    acts = client.get(f"/api/drivers/{did}/activities", headers=auth(boss)).json()["activities"]
+    assert acts[0] == {"type": "drive", "start": old, "end": NOW - 2 * DAY}
+    assert [a["end"] is None for a in acts] == [False, False, True]
+
+
+def test_sync_rejects_bad_shapes(client):
+    boss = register(client)
+    drv = join(client, add_driver(client, boss)["invite"]["code"])
+    two_open = [{"type": "drive", "start": T0, "end": None}, {"type": "rest", "start": T0 + H, "end": None}]
+    assert client.put("/api/sync", json={"activities": two_open}, headers=auth(drv)).status_code == 422
+    open_in_middle = [{"type": "drive", "start": T0, "end": None}, {"type": "rest", "start": T0 + H, "end": T0 + 2 * H}]
+    assert client.put("/api/sync", json={"activities": open_in_middle}, headers=auth(drv)).status_code == 422
+    too_old = [{"type": "drive", "start": NOW - 60 * DAY, "end": NOW - 59 * DAY}]
+    assert client.put("/api/sync", json={"activities": too_old}, headers=auth(drv)).status_code == 422
+    huge_end = [{"type": "drive", "start": T0, "end": 10 ** 20}]
+    assert client.put("/api/sync", json={"activities": huge_end}, headers=auth(drv)).status_code == 422
+    nan_speed = '{"share_location": true, "position": {"lat": 42, "lon": 23, "speed": NaN, "at": 1}}'
+    r = client.put("/api/sync", content=nan_speed, headers={**auth(drv), "Content-Type": "application/json"})
+    assert r.status_code == 422
+    big_status = {"x": "a" * 9000}
+    assert client.put("/api/sync", json={"status": big_status}, headers=auth(drv)).status_code == 422
+
+
+def test_location_cleared_on_rest_and_logout(client):
+    boss = register(client)
+    drv = join(client, add_driver(client, boss)["invite"]["code"])
+    pos = {"lat": 42.33, "lon": 23.55, "at": NOW}
+    client.put("/api/sync", json={"share_location": True, "position": pos, "status": {"activity": "drive"}}, headers=auth(drv))
+    assert client.get("/api/drivers", headers=auth(boss)).json()["drivers"][0]["position"]
+    client.put("/api/sync", json={"status": {"activity": "rest"}}, headers=auth(drv))
+    assert client.get("/api/drivers", headers=auth(boss)).json()["drivers"][0]["position"] is None
+    client.put("/api/sync", json={"position": pos, "status": {"activity": "drive"}}, headers=auth(drv))
+    client.post("/api/logout", headers=auth(drv))
+    assert client.get("/api/drivers", headers=auth(boss)).json()["drivers"][0]["position"] is None
+
+
+def test_cancelled_route_cannot_be_reopened_by_driver(client):
+    boss = register(client)
+    out = add_driver(client, boss)
+    drv = join(client, out["invite"]["code"])
+    wps = [{"lat": 42.0, "lon": 23.0}, {"lat": 43.0, "lon": 24.0}]
+    rid = client.post("/api/routes", json={"name": "x", "driver_id": out["driver"]["id"], "waypoints": wps},
+                      headers=auth(boss)).json()["route"]["id"]
+    client.patch(f"/api/routes/{rid}", json={"status": "cancelled"}, headers=auth(boss))
+    assert client.patch(f"/api/routes/{rid}", json={"status": "seen"}, headers=auth(drv)).status_code == 409
+
+
+def test_code_typed_with_cyrillic_letters(client):
+    boss = register(client)
+    code = add_driver(client, boss)["invite"]["code"]
+    cyr = code.translate(str.maketrans("ABEKMHPCTXY", "АВЕКМНРСТХУ")).lower()
+    assert client.post("/api/join", json={"code": cyr}).status_code == 200
+
+
+def test_oversized_body_rejected(client):
+    r = client.post("/api/owner/login", content=b"x" * 10, headers={"Content-Length": str(6 * 1024 * 1024), "Content-Type": "application/json"})
+    assert r.status_code == 413
