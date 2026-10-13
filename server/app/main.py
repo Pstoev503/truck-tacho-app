@@ -17,6 +17,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 import json
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import URLError, HTTPError
 
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.orm import Session
@@ -39,6 +41,8 @@ TYPES = ("drive", "work", "avail", "rest")
 @asynccontextmanager
 async def lifespan(_app):
     Base.metadata.create_all(engine)  # таблиците се създават при първото пускане
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE routes ADD COLUMN IF NOT EXISTS geometry JSON"))
     yield
 
 
@@ -457,6 +461,7 @@ class RouteIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     driver_id: int | None = None
     waypoints: list[Waypoint] = Field(min_length=2, max_length=25)
+    geometry: list[Waypoint] | None = Field(default=None, max_length=5000)
     notes: str = Field(default="", max_length=2000)
 
 
@@ -464,12 +469,13 @@ class RoutePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     driver_id: int | None = None
     waypoints: list[Waypoint] | None = Field(default=None, min_length=2, max_length=25)
+    geometry: list[Waypoint] | None = Field(default=None, max_length=5000)
     notes: str | None = Field(default=None, max_length=2000)
     status: Literal["new", "seen", "done", "cancelled"] | None = None
 
 
 def route_out(r: Route) -> dict:
-    return {"id": r.id, "name": r.name, "driver_id": r.driver_id, "waypoints": r.waypoints, "notes": r.notes,
+    return {"id": r.id, "name": r.name, "driver_id": r.driver_id, "waypoints": r.waypoints, "geometry": r.geometry, "notes": r.notes,
             "status": r.status, "created_at": r.created_at, "updated_at": r.updated_at}
 
 
@@ -479,7 +485,7 @@ def create_route(body: RouteIn, boss: User = Depends(owner), db: Session = Depen
         own_driver(db, boss, body.driver_id)
     t = now_ms()
     r = Route(company_id=boss.company_id, driver_id=body.driver_id, created_by=boss.id, name=body.name.strip(),
-              waypoints=[w.model_dump() for w in body.waypoints], notes=body.notes, status="new",
+              waypoints=[w.model_dump() for w in body.waypoints], geometry=[w.model_dump() for w in body.geometry] if body.geometry else None, notes=body.notes, status="new",
               created_at=t, updated_at=t)
     db.add(r)
     db.commit()
@@ -505,7 +511,7 @@ def patch_route(route_id: int, body: RoutePatch, user: User = Depends(current_us
         if r.driver_id != user.id:
             raise HTTPException(404, "Няма такъв маршрут")
         if body.status not in ("seen", "done") or any(
-                v is not None for v in (body.name, body.waypoints, body.notes, body.driver_id)):
+                v is not None for v in (body.name, body.waypoints, body.geometry, body.notes, body.driver_id)):
             raise HTTPException(403, "Шофьорът може само да отбележи маршрута като видян или минат")
         if r.status == "cancelled":
             raise HTTPException(409, "Маршрутът е отменен от шефа")
@@ -518,6 +524,8 @@ def patch_route(route_id: int, body: RoutePatch, user: User = Depends(current_us
             r.name = body.name.strip()
         if body.waypoints is not None:
             r.waypoints = [w.model_dump() for w in body.waypoints]
+        if body.geometry is not None:
+            r.geometry = [w.model_dump() for w in body.geometry] or None
         if body.notes is not None:
             r.notes = body.notes
         if body.status is not None:
@@ -525,6 +533,38 @@ def patch_route(route_id: int, body: RoutePatch, user: User = Depends(current_us
     r.updated_at = now_ms()
     db.commit()
     return {"route": route_out(r)}
+
+
+class RouteOptionsIn(BaseModel):
+    origin: Waypoint
+    destination: Waypoint
+
+
+@app.post("/api/route-options")
+def route_options(body: RouteOptionsIn, _boss: User = Depends(owner)):
+    # Public Valhalla demo is for prototyping; production can point VALHALLA_URL to a managed/self-hosted service.
+    base = os.environ.get("VALHALLA_URL", "https://valhalla1.openstreetmap.de").rstrip("/")
+    payload = json.dumps({
+        "locations": [
+            {"lat": body.origin.lat, "lon": body.origin.lon},
+            {"lat": body.destination.lat, "lon": body.destination.lon},
+        ],
+        "costing": "truck",
+        "units": "kilometers",
+        "alternates": 2,
+    }).encode("utf-8")
+    req = UrlRequest(base + "/route", data=payload, headers={
+        "Content-Type": "application/json",
+        "X-Client-Id": "Top10EU-route-planner",
+    }, method="POST")
+    try:
+        with urlopen(req, timeout=25) as response:
+            result = json.loads(response.read(5 * 1024 * 1024))
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        raise HTTPException(503, "Маршрутизаторът временно не отговаря") from exc
+    if not isinstance(result, dict) or not isinstance(result.get("trip"), dict):
+        raise HTTPException(502, "Маршрутизаторът не върна валиден маршрут")
+    return result
 
 
 @app.get("/api/health")
