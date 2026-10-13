@@ -1,0 +1,41 @@
+name: Тахо сонда (Android APK)
+
+on:
+  push:
+    paths:
+      - 'android-sonda/**'
+      - '.github/workflows/sonda.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Тестове и сглобяване
+        working-directory: android-sonda
+        run: gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug
+
+      - name: Публикувай APK за изтегляне
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android-sonda/app/build/outputs/apk/debug/app-debug.apk TahoSonda.apk
+          gh release create "sonda-v${{ github.run_number }}-${{ github.run_attempt }}" TahoSonda.apk \
+            --target "${{ github.sha }}" \
+            --latest \
+            --title "Тахо сонда v0.1.${{ github.run_number }}" \
+            --notes "Тестово приложение за връзка с тахографа по Bluetooth (ITS интерфейс, Регламент 2016/799, Допълнение 13). Клон ${{ github.ref_name }}."
