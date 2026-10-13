@@ -135,7 +135,7 @@
     <div class="card">
       <div class="row"><input id="search" placeholder="Търси място: град, склад, адрес…"><button class="b" id="searchBtn" style="flex:0 0 auto">Търси</button></div>
       <ul class="found" id="found"></ul>
-      <div class="muted" style="margin-top:6px">Или докосни картата, за да сложиш точка. Точките се местят с влачене.</div>
+      <div class="muted" style="margin-top:6px">Задай пътя с последователни точки по желаното трасе: начало, край и междинни точки при отклонения. Точките се местят с влачене.</div>
       <div class="row" style="margin-top:8px"><input id="coords" placeholder="или координати от Google Maps: 42.337, 23.553"><button class="b" id="coordsBtn" style="flex:0 0 auto">＋</button></div>
     </div>
     <div id="map"></div>
@@ -439,7 +439,7 @@ function drawRoute(fit = false) {
   }
   $('pts').innerHTML = pts.map((p, i) => `<li><span class="n">${i + 1}</span><input data-i="${i}" value="${esc(p.label)}" placeholder="${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}">
     <button class="b sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button><button class="b sm" data-dn="${i}" ${i < pts.length - 1 ? '' : 'disabled'}>↓</button><button class="b sm warn" data-del="${i}">✕</button></li>`).join('');
-  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · около ${Math.round(straightKm(pts))} км по права линия (по пътя е повече)` : 'Сложи поне 2 точки: тръгване и цел.';
+  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · около ${Math.round(straightKm(pts))} км по права линия; навигацията избира пътя между точките` : 'Сложи поне 2 точки: тръгване и цел.';
 }
 function addPoint(lat, lon, label) {
   if (pts.length >= 25) { toast('Най-много 25 точки'); return; }
