@@ -90,6 +90,7 @@ class Route(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     name: Mapped[str] = mapped_column(String(120))
     waypoints: Mapped[list] = mapped_column(Json)  # [{lat, lon, label}]
+    geometry: Mapped[list | None] = mapped_column(Json, nullable=True)  # точното трасе като координати
     notes: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(10), default="new")  # new | seen | done | cancelled
     created_at: Mapped[int] = mapped_column(BigInteger)
