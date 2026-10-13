@@ -135,8 +135,10 @@
     <div class="card">
       <div class="row"><input id="search" placeholder="Търси място: град, склад, адрес…"><button class="b" id="searchBtn" style="flex:0 0 auto">Търси</button></div>
       <ul class="found" id="found"></ul>
-      <div class="muted" style="margin-top:6px">Задай пътя с последователни точки по желаното трасе: начало, край и междинни точки при отклонения. Точките се местят с влачене.</div>
+      <div class="muted" style="margin-top:6px">Първо добави начало и край, после избери вариант от маршрутизатора или начертай собствено трасе. Шофьорът ще вижда избраната линия.</div>
       <div class="row" style="margin-top:8px"><input id="coords" placeholder="или координати от Google Maps: 42.337, 23.553"><button class="b" id="coordsBtn" style="flex:0 0 auto">＋</button></div>
+    <div class="acts"><button class="b" id="routeOptions">🛣 Варианти по пътищата</button><button class="b" id="drawRoute">✏ Начертай собствено трасе</button></div>
+      <div id="routeOptionsList" class="muted"></div>
     </div>
     <div id="map"></div>
     <div class="card" style="margin-top:10px">
@@ -186,7 +188,7 @@
 <script type="module">
 import { analyze, fmt, clock } from './engine/tacho-rules.js';
 import { totals } from './engine/activity-log.js';
-import { encodeRoute, googleMapsLinks, straightKm, cleanRoute } from './engine/route.js';
+import { encodeRoute, googleMapsLinks, straightKm, cleanRoute, decodePolyline6 } from './engine/route.js';
 import { serverUrl, dayKey } from './engine/sync.js';
 
 const H = 3600_000, DAY = 24 * H, MIN = 60_000;
@@ -413,37 +415,45 @@ function renderFleetMap() {
 
 // ───────── маршрут ─────────
 let pts = [];
+let geom = [];
+let drawing = false;
+let routeAlternatives = [];
 try { pts = JSON.parse(store.get('boss_route_draft') || '[]').filter(p => Number.isFinite(p.lat)); } catch {}
+try { geom = JSON.parse(store.get('boss_route_geometry') || '[]').filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon)); } catch {}
 $('rName').value = store.get('boss_route_name') || '';
 $('rNotes').value = store.get('boss_route_notes') || '';
-function saveDraft() { store.set('boss_route_draft', JSON.stringify(pts)); store.set('boss_route_name', $('rName').value); store.set('boss_route_notes', $('rNotes').value); }
+function saveDraft() { store.set('boss_route_draft', JSON.stringify(pts)); store.set('boss_route_geometry', JSON.stringify(geom)); store.set('boss_route_name', $('rName').value); store.set('boss_route_notes', $('rNotes').value); }
 ['rName', 'rNotes'].forEach(id => $(id).oninput = saveDraft);
 function initRouteMap() {
   if (routeMap || !L) return;
   routeMap = L.map('map').setView([42.7, 25.0], 7);
   tiles().addTo(routeMap);
   routeLayer = L.layerGroup().addTo(routeMap);
-  routeMap.on('click', e => addPoint(e.latlng.lat, e.latlng.lng, ''));
+  routeMap.on('click', e => {
+    if (drawing) { geom.push({ lat: e.latlng.lat, lon: e.latlng.lng }); saveDraft(); drawRoute(); }
+    else addPoint(e.latlng.lat, e.latlng.lng, '');
+  });
   drawRoute(true);
 }
 function drawRoute(fit = false) {
   if (routeLayer) {
     routeLayer.clearLayers();
-    if (pts.length > 1) L.polyline(pts.map(p => [p.lat, p.lon]), { color: '#2196F3', weight: 4, dashArray: '6 6' }).addTo(routeLayer);
+    const line = geom.length > 1 ? geom : pts;
+    if (line.length > 1) L.polyline(line.map(p => [p.lat, p.lon]), { color: '#2196F3', weight: 5, dashArray: geom.length > 1 ? null : '6 6' }).addTo(routeLayer);
     pts.forEach((p, i) => {
       const color = i === 0 ? '#4CAF50' : i === pts.length - 1 ? '#F44336' : '#2196F3';
       const m = L.marker([p.lat, p.lon], { draggable: true, icon: pinIcon(i + 1, color) }).addTo(routeLayer);
-      m.on('dragend', () => { const q = m.getLatLng(); pts[i].lat = q.lat; pts[i].lon = q.lng; saveDraft(); drawRoute(); });
+      m.on('dragend', () => { const q = m.getLatLng(); pts[i].lat = q.lat; pts[i].lon = q.lng; geom = []; saveDraft(); drawRoute(); });
     });
-    if (fit && pts.length) routeMap.fitBounds(pts.map(p => [p.lat, p.lon]), { padding: [30, 30], maxZoom: 12 });
+    if (fit && line.length) routeMap.fitBounds(line.map(p => [p.lat, p.lon]), { padding: [30, 30], maxZoom: 12 });
   }
   $('pts').innerHTML = pts.map((p, i) => `<li><span class="n">${i + 1}</span><input data-i="${i}" value="${esc(p.label)}" placeholder="${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}">
     <button class="b sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button><button class="b sm" data-dn="${i}" ${i < pts.length - 1 ? '' : 'disabled'}>↓</button><button class="b sm warn" data-del="${i}">✕</button></li>`).join('');
-  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · около ${Math.round(straightKm(pts))} км по права линия; навигацията избира пътя между точките` : 'Сложи поне 2 точки: тръгване и цел.';
+  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · ${geom.length > 1 ? `${geom.length} точки по запазената линия` : 'няма избрана пътна геометрия'} · около ${Math.round(straightKm(geom.length > 1 ? geom : pts))} км по права линия` : 'Сложи поне 2 точки: тръгване и цел.';
 }
 function addPoint(lat, lon, label) {
   if (pts.length >= 25) { toast('Най-много 25 точки'); return; }
-  pts.push({ lat, lon, label }); saveDraft(); drawRoute();
+  pts.push({ lat, lon, label }); geom = []; saveDraft(); drawRoute();
 }
 $('pts').oninput = e => { const i = e.target.dataset.i; if (i != null) { pts[i].label = e.target.value; saveDraft(); } };
 $('pts').onclick = e => {
@@ -452,7 +462,7 @@ $('pts').onclick = e => {
   else if (dn != null) [pts[+dn + 1], pts[dn]] = [pts[dn], pts[+dn + 1]];
   else if (del != null) pts.splice(del, 1);
   else return;
-  saveDraft(); drawRoute();
+  geom = []; saveDraft(); drawRoute();
 };
 async function searchPlace() {
   const q = $('search').value.trim(); if (q.length < 2) return;
@@ -480,8 +490,52 @@ $('found').onclick = e => {
   routeMap && routeMap.setView([+li.dataset.lat, +li.dataset.lon], 11);
   $('found').innerHTML = ''; $('search').value = '';
 };
-function currentRoute() { return cleanRoute({ name: $('rName').value.trim(), notes: $('rNotes').value.trim(), waypoints: pts }); }
+function currentRoute() { return cleanRoute({ name: $('rName').value.trim(), notes: $('rNotes').value.trim(), waypoints: pts, geometry: geom }); }
 function routeLink(r) { return `${appBase()}index.html#route=${encodeRoute(r)}`; }
+$('drawRoute').onclick = () => {
+  if (!drawing) {
+    if (pts.length < 2) { $('routeErr').textContent = 'Първо добави начало и край.'; return; }
+    geom = [{ lat: pts[0].lat, lon: pts[0].lon }]; drawing = true;
+    $('drawRoute').textContent = 'Готово с чертането';
+    $('routeErr').textContent = 'Докосвай картата по желаното трасе, после натисни „Готово“.';
+  } else {
+    if (pts.length > 1) geom.push({ lat: pts[pts.length - 1].lat, lon: pts[pts.length - 1].lon });
+    drawing = false; $('drawRoute').textContent = '✏ Начертай собствено трасе';
+    $('routeErr').textContent = geom.length > 1 ? 'Собственото трасе е запазено.' : '';
+  }
+  saveDraft(); drawRoute();
+};
+function valhallaGeometry(trip) {
+  const points = [];
+  for (const leg of (trip?.legs || [])) {
+    if (!leg.shape) continue;
+    const decoded = decodePolyline6(leg.shape);
+    points.push(...(points.length ? decoded.slice(1) : decoded));
+  }
+  return points;
+}
+$('routeOptions').onclick = async () => {
+  if (pts.length !== 2) { $('routeErr').textContent = 'За автоматични варианти добави точно начало и край.'; return; }
+  if (!S.token) { $('routeErr').textContent = 'Влез в таблото, за да поискаш варианти от маршрутизатора.'; return; }
+  $('routeOptionsList').textContent = 'Търся варианти по пътната мрежа…';
+  try {
+    const out = await api('/api/route-options', { method: 'POST', body: { origin: pts[0], destination: pts[1] } });
+    routeAlternatives = [out.trip, ...(out.alternates || []).map(x => x.trip || x)].filter(x => x?.legs?.length);
+    $('routeOptionsList').innerHTML = routeAlternatives.map((t, i) => {
+      const km = Math.round(t.summary?.length || 0), min = Math.round((t.summary?.time || 0) / 60);
+      return '<button class="b sm" data-route-option="' + i + '" style="display:block;width:100%;margin-top:6px;text-align:left">Вариант ' + (i + 1) + ' · ' + km + ' км · около ' + Math.floor(min / 60) + ' ч ' + (min % 60) + ' мин</button>';
+    }).join('') || 'Няма намерени варианти.';
+  } catch (e) { $('routeOptionsList').textContent = e.message; }
+};
+$('routeOptionsList').onclick = e => {
+  const i = e.target.closest('[data-route-option]')?.dataset.routeOption;
+  if (i == null) return;
+  const trip = routeAlternatives[+i], shape = valhallaGeometry(trip);
+  if (shape.length < 2) { $('routeErr').textContent = 'Маршрутизаторът не върна линия за този вариант.'; return; }
+  geom = shape; drawing = false; saveDraft(); drawRoute(true);
+  $('routeErr').textContent = 'Избран е вариант ' + (+i + 1) + '. Линията ще бъде изпратена към шофьора.';
+};
+
 $('shareRoute').onclick = () => {
   const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; }
   $('routeErr').textContent = '';
@@ -489,7 +543,7 @@ $('shareRoute').onclick = () => {
   shareText(`Маршрут: ${r.name}\n${link}`, link);
 };
 $('previewRoute').onclick = () => { const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; } window.open(googleMapsLinks(r.waypoints, { fromHere: false })[0], '_blank', 'noopener'); };
-$('clearRoute').onclick = () => { if (!pts.length || confirm('Да изчистя точките?')) { pts = []; $('rName').value = ''; $('rNotes').value = ''; saveDraft(); drawRoute(); } };
+$('clearRoute').onclick = () => { if (!pts.length || confirm('Да изчистя точките?')) { pts = []; geom = []; drawing = false; routeAlternatives = []; $('routeOptionsList').innerHTML = ''; $('drawRoute').classList.remove('on'); $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = ''; $('rNotes').value = ''; saveDraft(); drawRoute(); } };
 $('sendRoute').onclick = async () => {
   const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; }
   const driver_id = +$('rDriver').value || null;
@@ -513,7 +567,7 @@ async function loadRoutes() {
     $('sentRoutes').onclick = async e => {
       const id = e.target.dataset.load || e.target.dataset.cancel; if (!id) return;
       const r = out.routes.find(x => x.id == id);
-      if (e.target.dataset.load) { pts = r.waypoints.map(p => ({ ...p })); $('rName').value = r.name; $('rNotes').value = r.notes; saveDraft(); drawRoute(true); window.scrollTo({ top: 0 }); }
+      if (e.target.dataset.load) { pts = r.waypoints.map(p => ({ ...p })); geom = (r.geometry || []).map(p => ({ lat: p.lat, lon: p.lon })); drawing = false; $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = r.name; $('rNotes').value = r.notes; saveDraft(); drawRoute(true); window.scrollTo({ top: 0 }); }
       else if (confirm('Да отменя маршрута?')) { await api(`/api/routes/${id}`, { method: 'PATCH', body: { status: 'cancelled' } }); loadRoutes(); }
     };
   } catch (e) { $('sentRoutes').textContent = e.message; }
