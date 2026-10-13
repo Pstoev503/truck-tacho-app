@@ -7,6 +7,7 @@
 
 const R_KM = 6371;
 export const MAX_POINTS = 25;
+export const MAX_GEOMETRY_POINTS = 5000;
 export const GOOGLE_MAX_WAYPOINTS = 9; // междинни точки в една връзка към Google Maps
 
 const round6 = x => Math.round(x * 1e6) / 1e6;
@@ -19,10 +20,13 @@ export function cleanRoute(r) {
   const waypoints = r.waypoints.filter(okPoint).slice(0, MAX_POINTS)
     .map(p => ({ lat: round6(p.lat), lon: round6(p.lon), label: String(p.label ?? '').slice(0, 120) }));
   if (waypoints.length < 2) return null;
+  const geometry = Array.isArray(r.geometry) ? r.geometry.filter(okPoint).slice(0, MAX_GEOMETRY_POINTS)
+    .map(p => ({ lat: round6(p.lat), lon: round6(p.lon) })) : [];
   return {
     name: String(r.name ?? '').slice(0, 120) || 'Маршрут',
     notes: String(r.notes ?? '').slice(0, 2000),
-    waypoints
+    waypoints,
+    ...(geometry.length > 1 ? { geometry } : {})
   };
 }
 
@@ -39,18 +43,47 @@ function fromB64url(s) {
   return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
 }
 
+/** Valhalla encoded polyline, precision 6. */
+export function decodePolyline6(encoded) {
+  const out = []; let index = 0, lat = 0, lon = 0;
+  const next = () => {
+    let result = 0, shift = 0, b;
+    do { if (index >= encoded.length || shift > 30) throw new Error('Невалидна геометрия'); b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    return (result & 1) ? ~(result >> 1) : (result >> 1);
+  };
+  while (index < encoded.length) {
+    lat += next(); lon += next();
+    out.push({ lat: lat / 1e6, lon: lon / 1e6 });
+    if (out.length > MAX_GEOMETRY_POINTS) throw new Error('Твърде много точки');
+  }
+  return out;
+}
+function encodePolyline6(points) {
+  let lastLat = 0, lastLon = 0, out = '';
+  const enc = value => {
+    let n = value < 0 ? ~(value << 1) : (value << 1);
+    while (n >= 0x20) { out += String.fromCharCode((0x20 | (n & 0x1f)) + 63); n >>= 5; }
+    out += String.fromCharCode(n + 63);
+  };
+  for (const p of points) {
+    const lat = Math.round(p.lat * 1e6), lon = Math.round(p.lon * 1e6);
+    enc(lat - lastLat); enc(lon - lastLon); lastLat = lat; lastLon = lon;
+  }
+  return out;
+}
+
 /** Маршрут → кратък текст за връзка. */
 export function encodeRoute(route) {
   const r = cleanRoute(route);
   if (!r) throw new Error('Маршрутът трябва да има поне 2 точки');
-  return toB64url(JSON.stringify({ n: r.name, t: r.notes, w: r.waypoints.map(p => [p.lat, p.lon, p.label]) }));
+  return toB64url(JSON.stringify({ n: r.name, t: r.notes, w: r.waypoints.map(p => [p.lat, p.lon, p.label]), ...(r.geometry ? { g: encodePolyline6(r.geometry) } : {}) }));
 }
 
 /** Текст от връзка → маршрут или null. */
 export function decodeRoute(s) {
   try {
     const o = JSON.parse(fromB64url(String(s)));
-    return cleanRoute({ name: o.n, notes: o.t, waypoints: (o.w || []).map(([lat, lon, label]) => ({ lat, lon, label })) });
+    return cleanRoute({ name: o.n, notes: o.t, waypoints: (o.w || []).map(([lat, lon, label]) => ({ lat, lon, label })), geometry: o.g ? decodePolyline6(o.g) : [] });
   } catch {
     return null;
   }
@@ -107,6 +140,8 @@ export function gpx(route) {
     `  <rte><name>${esc(r.name)}</name>`,
     ...r.waypoints.map((p, i) => '  ' + pt('rtept', p, i)),
     '  </rte>',
+    ...(r.geometry ? ['  <trk><name>' + esc(r.name) + '</name><trkseg>',
+      ...r.geometry.map(p => '    <trkpt lat="' + p.lat + '" lon="' + p.lon + '"/>'), '  </trkseg></trk>'] : []),
     '</gpx>'
   ].join('\n');
 }
