@@ -6,6 +6,8 @@
     <meta name="google" content="notranslate">
     <title>Truck Tacho Pro</title>
     <link rel="manifest" href="./manifest.json">
+    <link rel="stylesheet" href="./vendor/leaflet-1.9.4/leaflet.css">
+    <script src="./vendor/leaflet-1.9.4/leaflet.js"></script>
     <style>
         :root { --ui-scale: 1; }
         body{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:10px;display:flex;flex-direction:column;align-items:center;overflow-x:hidden}
@@ -260,6 +262,7 @@
         <h3 style="color:#2196F3; margin:0 0 4px;" id="route-title">Маршрут</h3>
         <div style="font-size:12px; color:#aaa; margin-bottom:8px;" id="route-meta"></div>
         <div style="font-size:14px; color:#ffcc80; margin-bottom:8px; white-space:pre-wrap;" id="route-notes"></div>
+        <div id="route-preview-map" style="height:260px; margin:8px 0; border-radius:10px; background:#111;"></div>
         <ol style="margin:0 0 10px; padding-left:22px; font-size:14px; line-height:1.5;" id="route-points"></ol>
         <div id="route-links" style="display:flex; flex-direction:column; gap:8px;"></div>
         <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;" id="route-actions"></div>
@@ -1600,6 +1603,23 @@ function renderRouteCard() {
 }
 function showRouteAt(i) { if (routes[i]) showRoute(routes[i]); }
 let shownRoute = null;
+let routePreviewMap = null, routePreviewLayer = null;
+function renderRoutePreview(r) {
+    if (!window.L) return;
+    const exact = Array.isArray(r.geometry) && r.geometry.length > 1;
+    const line = (exact ? r.geometry : r.waypoints).map(p => [p.lat, p.lon]);
+    setTimeout(() => {
+        if (!routePreviewMap) {
+            routePreviewMap = L.map('route-preview-map');
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(routePreviewMap);
+            routePreviewLayer = L.layerGroup().addTo(routePreviewMap);
+        }
+        routePreviewMap.invalidateSize(); routePreviewLayer.clearLayers();
+        L.polyline(line, { color: '#2196F3', weight: 5, dashArray: exact ? null : '6 6' }).addTo(routePreviewLayer);
+        line.forEach((p, i) => L.circleMarker(p, { radius: i === 0 || i === line.length - 1 ? 7 : 4, color: '#fff', weight: 2, fillColor: i === 0 ? '#4CAF50' : i === line.length - 1 ? '#F44336' : '#2196F3', fillOpacity: 1 }).addTo(routePreviewLayer));
+        routePreviewMap.fitBounds(line, { padding: [18, 18], maxZoom: 14 });
+    }, 50);
+}
 function showRoute(r) {
     shownRoute = r;
     document.getElementById('route-title').innerText = '📍 ' + r.name;
@@ -1618,6 +1638,7 @@ function showRoute(r) {
     acts += '<button class="rt-btn" style="flex:1;" onclick="closeRouteModal()">Затвори</button>';
     document.getElementById('route-actions').innerHTML = acts;
     document.getElementById('route-modal').style.display = 'flex';
+    renderRoutePreview(r);
     if (r.source === 'server' && r.status === 'new' && conn) markRoute('seen', true);
 }
 function closeRouteModal() { document.getElementById('route-modal').style.display = 'none'; }
