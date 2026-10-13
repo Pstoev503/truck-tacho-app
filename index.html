@@ -1629,8 +1629,8 @@ function showRoute(r) {
     document.getElementById('route-points').innerHTML = r.waypoints.map((p, i) => '<li>' + escHtml(p.label || (p.lat.toFixed(4) + ', ' + p.lon.toFixed(4))) + '</li>').join('');
     const links = window.tachoRoute ? tachoRoute.googleMapsLinks(r.waypoints) : [];
     document.getElementById('route-links').innerHTML = links.map((u, i) =>
-        '<a href="' + escHtml(u) + '" target="_blank" rel="noopener" class="rt-btn go" style="font-size:17px;">▶ Навигация' +
-        (links.length > 1 ? ' — етап ' + (i + 1) + ' от ' + links.length : '') + ' (Google Maps)</a>').join('') +
+        '<a href="' + escHtml(u) + '" target="_blank" rel="noopener" class="rt-btn go" style="font-size:17px;">▶ Навигация по точките' +
+        (links.length > 1 ? ' — етап ' + (i + 1) + ' от ' + links.length : '') + ' (Google Maps може да предложи друго трасе)</a>').join('') +
         '<button class="rt-btn" onclick="downloadRouteGpx()">⬇ GPX за друга навигация</button>';
     let acts = '';
     if (r.source === 'server' && conn) acts += '<button class="rt-btn ok" style="flex:1;" onclick="markRoute(\'done\')">🏁 Минат</button>';
