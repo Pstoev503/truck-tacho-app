@@ -7,7 +7,7 @@
 
 const R_KM = 6371;
 export const MAX_POINTS = 25;
-export const MAX_GEOMETRY_POINTS = 5000;
+export const MAX_GEOMETRY_POINTS = 20000;
 export const GOOGLE_MAX_WAYPOINTS = 9; // междинни точки в една връзка към Google Maps
 
 const round6 = x => Math.round(x * 1e6) / 1e6;
