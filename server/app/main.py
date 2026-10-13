@@ -461,7 +461,7 @@ class RouteIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     driver_id: int | None = None
     waypoints: list[Waypoint] = Field(min_length=2, max_length=25)
-    geometry: list[Waypoint] | None = Field(default=None, max_length=5000)
+    geometry: list[Waypoint] | None = Field(default=None, max_length=20000)
     notes: str = Field(default="", max_length=2000)
 
 
