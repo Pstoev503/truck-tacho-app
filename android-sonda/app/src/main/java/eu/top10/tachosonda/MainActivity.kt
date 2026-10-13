@@ -150,8 +150,9 @@ class MainActivity : Activity() {
             |   избери този телефон и потвърди кода и на двете места.
             |   Ако има опция „ITS“ или „споделяне на данни“ — разреши я.
             |   (Stoneridge: менюто Bluetooth; при някои сдвояването става и от телефона.)
-            |5. Тук: „3. Търси“ → докосни тахографа (⭐ отгоре) → „Свържи — класически“.
-            |6. Сондата сама пуска теста. Ако поиска PIN — въведи го.
+            |5. Тук: „3. Търси“ → докосни тахографа (⭐ отгоре) → първо „Свържи — BLE“
+            |   (VDO казва, че DTCO 4.1 ползва BLE), после пак докосни → „Свържи — класически“.
+            |6. При класическа връзка тестът тръгва сам. Ако поиска PIN — въведи го.
             |7. Накрая „Сподели“ → прати ми дневника. Или „Запази“ → отива в Изтегляния.
             """.trimMargin()
         )
@@ -476,8 +477,8 @@ class MainActivity : Activity() {
 
     private fun deviceMenu(d: Dev) {
         val items = arrayOf(
-            "Свържи — класически Bluetooth (за тахографа)",
-            "Свържи — BLE (покажи услугите)",
+            "Свържи — BLE (DTCO 4.1 и по-нови: първо това)",
+            "Свържи — класически Bluetooth (SPP)",
             "Сдвои с телефона",
             "Попитай за услугите (SDP)"
         )
@@ -485,8 +486,8 @@ class MainActivity : Activity() {
             .setTitle(d.name ?: d.device.address)
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> connectClassic(d.device)
-                    1 -> connectBle(d.device)
+                    0 -> connectBle(d.device)
+                    1 -> connectClassic(d.device)
                     2 -> pair(d.device)
                     3 -> sdp(d.device)
                 }
