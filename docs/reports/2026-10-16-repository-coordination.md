@@ -13,7 +13,8 @@
 
 ## Собственост и следващи зависимости
 
-- Codex: `engine/plan.js`, `engine/plan.test.js`, `docs/planner-contract-v1.md`, `docs/planner-rules.md` и DATEX одит.
+- Codex: `engine/plan.js`, `engine/plan.test.js`, `docs/planner-contract-v1.md`, `docs/planner-rules.md`; за DATEX запазва независимата проверка и приемането.
+- Copilot: публично DATEX проучване в отделния PR #11 под `docs/providers/bg-datex-*`; проучването не се счита за прието без проверката на Codex.
 - Следващ Copilot пакет: `boss.html`, `index.html`, `engine/route.js`, `engine/route.test.js` и UI/route API адаптери. Този пакет не започва тук.
 - Общите тахографски правила, activity log, sync, зависимости и workflows остават заключени за координиран отделен пакет.
 - Папките за координация, доставчици, разрешени references и отчети, както и вариантът за runtime миграция и rollback, са предложения. Няма преместени runtime файлове.
