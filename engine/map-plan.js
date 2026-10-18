@@ -185,6 +185,15 @@ function validateRequest(request, dependencies) {
     if (!isObject(activity) || !ACTIVITY_TYPES.has(activity.type)) {
       fail('INVALID_ACTIVITY', field, 'activity type must be drive, work, avail, or rest');
     }
+    rejectUnknownKeys(activity, new Set(['type', 'start', 'end', 'manual', 'ferry']), field);
+    for (const flag of ['manual', 'ferry']) {
+      if (activity[flag] !== undefined && typeof activity[flag] !== 'boolean') {
+        fail('INVALID_ACTIVITY_FLAG', `${field}.${flag}`, `${field}.${flag} must be a boolean`);
+      }
+    }
+    if (activity.ferry !== undefined && activity.type !== 'rest') {
+      fail('FERRY_REQUIRES_REST', `${field}.ferry`, 'ferry is only valid for rest activities');
+    }
     parseUtc(activity.start, `${field}.start`);
     if (activity.end !== null) {
       const start = parseUtc(activity.start, `${field}.start`);

@@ -299,6 +299,77 @@ test('non-finite times and departures before now are rejected', () => {
   assert.equal(createMapPlan(invalidActivity, dependencies).error.code, 'INVALID_UTC_TIME');
 });
 
+test('unknown activity properties are rejected instead of discarded', () => {
+  const input = request({
+    initialState: {
+      activities: [{
+        type: 'rest', start: now - 60_000, end: now, regulatoryOverride: true
+      }],
+      lastWeeklyRestEnd: null,
+      source: 'test-log'
+    }
+  });
+  const result = createMapPlan(input, dependencies);
+  assert.equal(result.state, 'invalid-input');
+  assert.equal(result.error.code, 'UNKNOWN_FIELD');
+  assert.equal(result.error.field, 'initialState.activities[0].regulatoryOverride');
+  assert.equal(result.engineResult, null);
+});
+
+test('manual and ferry activity flags must be booleans', () => {
+  for (const [flag, invalidValue] of [
+    ['manual', 'false'],
+    ['manual', 0],
+    ['ferry', 'false'],
+    ['ferry', 1]
+  ]) {
+    const result = createMapPlan(request({
+      initialState: {
+        activities: [{
+          type: 'rest', start: now - 60_000, end: now, [flag]: invalidValue
+        }],
+        lastWeeklyRestEnd: null,
+        source: 'test-log'
+      }
+    }), dependencies);
+    assert.equal(result.state, 'invalid-input');
+    assert.equal(result.error.code, 'INVALID_ACTIVITY_FLAG');
+    assert.equal(result.error.field, `initialState.activities[0].${flag}`);
+  }
+});
+
+test('ferry flags are rejected on non-rest activities', () => {
+  for (const ferry of [false, true]) {
+    const result = createMapPlan(request({
+      initialState: {
+        activities: [{
+          type: 'drive', start: now - 60_000, end: now, ferry
+        }],
+        lastWeeklyRestEnd: null,
+        source: 'test-log'
+      }
+    }), dependencies);
+    assert.equal(result.state, 'invalid-input');
+    assert.equal(result.error.code, 'FERRY_REQUIRES_REST');
+  }
+});
+
+test('valid boolean manual and ferry history flags reach the planner unchanged', () => {
+  const activities = [
+    { type: 'rest', start: now - 180_000, end: now - 120_000, manual: true, ferry: true },
+    { type: 'rest', start: now - 120_000, end: now - 60_000, manual: false, ferry: false },
+    { type: 'drive', start: now - 60_000, end: now, manual: false }
+  ];
+  const input = request({
+    initialState: { activities, lastWeeklyRestEnd: null, source: 'test-log' }
+  });
+  const before = structuredClone(input);
+  const { result, received } = execute(input, options => buildPlan(options));
+  assert.equal(result.state, 'estimated');
+  assert.deepEqual(received.activities, activities);
+  assert.deepEqual(input, before);
+});
+
 test('invalid IANA display time zones are rejected', () => {
   assert.equal(createMapPlan(request({ displayTimeZone: 'Mars/Olympus' }), dependencies).error.code, 'INVALID_TIME_ZONE');
 });
