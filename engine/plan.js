@@ -142,22 +142,8 @@ export function buildPlan({
     while (remainingDrive > 0.5) {
       if (++iterations > MAX_ITERATIONS) throw new Error('Планът е твърде дълъг за симулация.');
 
-      if (breakStyle === '15+30' && !splitFirstTaken && continuousDrive >= 4 * H) {
-        add('rest', BREAK_SPLIT_FIRST, 'Пауза 15 мин', index);
-        splitFirstTaken = true;
-        continue;
-      }
-      if (continuousDrive >= LIMITS.continuousDrive) {
-        const duration = breakStyle === '15+30' && splitFirstTaken
-          ? BREAK_SPLIT_SECOND : LIMITS.breakFull;
-        add('rest', duration, breakStyle === '15+30' && splitFirstTaken
-          ? 'Пауза 30 мин (15 + 30)' : 'Пауза 45 мин', index);
-        continuousDrive = 0;
-        splitFirstTaken = false;
-        continue;
-      }
-
       let dailyLimit = DAILY_STANDARD;
+      let extensionAvailable = false;
       if (dailyExtensionAlreadyUsed) {
         dailyLimit = DAILY_EXTENDED;
         if (stage.useExtension && !extensionUsedOnStage && !extensionIgnored) {
@@ -168,18 +154,31 @@ export function buildPlan({
         const state = analysisAt(time).status.daily;
         if (state.extensionsLeft > 0) {
           dailyLimit = DAILY_EXTENDED;
-          extensionUsedOnStage = true;
-          dailyExtensionAlreadyUsed = true;
+          extensionAvailable = true;
         } else if (!extensionIgnored) {
           ignoredExtensions.push({ stageIndex: index, reason: 'Използвани са двете седмични удължения или липсва история.' });
           extensionIgnored = true;
         }
       }
-      if (dailyDrive >= dailyLimit) {
+      const dailyState = analysisAt(time).status.daily;
+      const canReduceRest = stage.dailyRest === 'reduced' && !reducedRestUsedOnStage &&
+        dailyState.reducedRestsLeft > 0;
+      const chosenRestDuration = canReduceRest ? LIMITS.dailyRestReduced : LIMITS.dailyRestRegular;
+      // latestRestStart can assume a minimum 9h rest. The stage's explicit
+      // regular selection instead requires all 11h inside the duty window.
+      const restWindow = multiManning ? LIMITS.multiManningWindow : LIMITS.dailyWindow;
+      const restDeadline = (dailyState.dutyStart ?? time) + restWindow - chosenRestDuration;
+      const splitBreakDue = breakStyle === '15+30' && !splitFirstTaken && continuousDrive >= 4 * H;
+      const fullBreakDue = continuousDrive >= LIMITS.continuousDrive;
+      const breakDuration = splitBreakDue ? BREAK_SPLIT_FIRST : fullBreakDue
+        ? (breakStyle === '15+30' && splitFirstTaken ? BREAK_SPLIT_SECOND : LIMITS.breakFull) : 0;
+
+      if (dailyDrive >= dailyLimit || time >= restDeadline ||
+          (breakDuration > 0 && time + breakDuration >= restDeadline)) {
         let restDuration = LIMITS.dailyRestRegular;
         let restLabel = 'Редовна дневна почивка 11 ч';
         if (stage.dailyRest === 'reduced' && !reducedRestUsedOnStage) {
-          if (analysisAt(time).status.daily.reducedRestsLeft > 0) {
+          if (canReduceRest) {
             restDuration = LIMITS.dailyRestReduced;
             restLabel = 'Намалена дневна почивка 9 ч';
             reducedRestUsedOnStage = true;
@@ -191,10 +190,28 @@ export function buildPlan({
           ignoredDailyRests.push({ stageIndex: index, reason: 'Етапът вече използва една намалена дневна почивка.' });
           reducedRestIgnored = true;
         }
+        if (time > restDeadline) {
+          ignoredDailyRests.push({ code: 'DAILY_REST_DEADLINE_MISSED', stageIndex: index,
+            reason: 'Срокът за избраната дневна почивка е пропуснат преди следващото управление; почивката започва веднага, без да заличава изминалия интервал.' });
+          restLabel = `Дневна почивка ${restDuration / H} ч — избраният вид е извън срока`;
+        }
         add('rest', restDuration, restLabel, index);
         dailyDrive = 0;
         continuousDrive = 0;
         dailyExtensionAlreadyUsed = false;
+        splitFirstTaken = false;
+        continue;
+      }
+
+      if (splitBreakDue) {
+        add('rest', BREAK_SPLIT_FIRST, 'Пауза 15 мин', index);
+        splitFirstTaken = true;
+        continue;
+      }
+      if (fullBreakDue) {
+        add('rest', breakDuration, breakStyle === '15+30' && splitFirstTaken
+          ? 'Пауза 30 мин (15 + 30)' : 'Пауза 45 мин', index);
+        continuousDrive = 0;
         splitFirstTaken = false;
         continue;
       }
@@ -204,7 +221,8 @@ export function buildPlan({
       const available = Math.min(
         remainingDrive,
         dailyLimit - dailyDrive,
-        continuousLimit - continuousDrive
+        continuousLimit - continuousDrive,
+        restDeadline - time
       );
       if (available <= 0) continue;
       const before = time;
@@ -221,7 +239,10 @@ export function buildPlan({
       stageResults[index].distanceKm += distance;
       stageResults[index].drivingMs += available;
       stageResults[index].end = time;
-      if (dailyDrive > DAILY_STANDARD) dailyExtensionAlreadyUsed = true;
+      if (dailyDrive > DAILY_STANDARD) {
+        dailyExtensionAlreadyUsed = true;
+        if (extensionAvailable) extensionUsedOnStage = true;
+      }
     }
     if (!stageResults[index]) {
       stageResults[index] = {
@@ -238,7 +259,8 @@ export function buildPlan({
   const historyCoverage = checkHistoryCoverage(baseActivities, weekStart(start) - WEEK_MS, start, currentTime);
   const historyComplete = historyCoverage.complete && !analysis.status.daily.startAssumed && !analysis.status.weeklyRest.estimated;
   const departureGapAssumed = start > currentTime;
-  const confirmed = analysis.violations.length === 0 && historyComplete && !departureGapAssumed;
+  const restChoiceMissed = ignoredDailyRests.some(item => item.code === 'DAILY_REST_DEADLINE_MISSED');
+  const confirmed = analysis.violations.length === 0 && historyComplete && !departureGapAssumed && !restChoiceMissed;
 
   return {
     departure: start,
@@ -259,6 +281,7 @@ export function buildPlan({
     assumptions: [
       'Ориентировъчни постоянни скорости: 80 км/ч по магистрала и 55 км/ч по обикновен път.',
       'Не са включени трафик, граници, товарене, ограничения за камиони или наличност на паркинги.',
+      ...(restChoiceMissed ? ['Избраният вид дневна почивка вече е извън срока; незабавната почивка не променя миналата история.'] : []),
       ...(departureGapAssumed ? ['Дейността до бъдещия час на потегляне е неизвестна; не се зачита автоматично като почивка.'] : []),
       ...(historyCoverage.gaps.length ? [`Има ${historyCoverage.gaps.length} непокрити интервала в необходимата начална история.`] : []),
       ...(!historyComplete ? ['Историята не покрива надеждно две седмици, дневните удължения или последната седмична почивка.'] : [])
