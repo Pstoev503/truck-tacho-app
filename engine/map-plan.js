@@ -1,3 +1,5 @@
+import { PLANNER_SPEEDS } from './plan.js';
+
 const ROAD_TYPES = new Set(['motorway', 'ordinary']);
 const ACTIVITY_TYPES = new Set(['drive', 'work', 'avail', 'rest']);
 const TOP_LEVEL_KEYS = new Set([
@@ -24,7 +26,7 @@ const UNSUPPORTED_REQUIREMENT_CODES = {
 };
 const SECTION_TOLERANCE_M = 0.05;
 const HOUR_MS = 60 * 60 * 1000;
-const SPEED_KMH = { motorway: 80, ordinary: 55 };
+const SPEED_KMH = PLANNER_SPEEDS;
 
 class InputProblem extends Error {
   constructor(code, field, details, state = 'invalid-input') {
@@ -272,10 +274,10 @@ function pointCoordinates(point) {
   return { lat: point.lat, lon: point.lon };
 }
 
-function mapEngineEvents(engineResult, sections, routeIndex, pointAtOffset) {
+function mapEngineEvents(engineResult, sections, routeIndex, pointAtOffset, departureUtcMs) {
   if (!engineResult || !Array.isArray(engineResult.events) ||
       !Array.isArray(engineResult.stages) || engineResult.stages.length !== sections.length ||
-      !Number.isFinite(engineResult.arrival) || !Number.isFinite(engineResult.departure)) {
+      !Number.isFinite(engineResult.arrival) || engineResult.departure !== departureUtcMs) {
     throw new Error('engine result is missing schedule data');
   }
   for (let index = 0; index < sections.length; index++) {
@@ -433,7 +435,9 @@ export function createMapPlan(request, dependencies) {
 
   let events;
   try {
-    events = mapEngineEvents(engineResult, sections, routeIndex, dependencies.pointAtOffset);
+    events = mapEngineEvents(
+      engineResult, sections, routeIndex, dependencies.pointAtOffset, request.departureUtcMs
+    );
   } catch (error) {
     return {
       ...base,
@@ -454,6 +458,18 @@ export function createMapPlan(request, dependencies) {
 
   const warnings = [];
   const assumptions = [...(Array.isArray(engineResult.assumptions) ? engineResult.assumptions : [])];
+  warnings.push({
+    code: 'ESTIMATE_ONLY',
+    text: 'Estimated schedule only; traffic, truck restrictions, road passability, and stop availability are not validated. No legal approval.'
+  });
+  if (engineResult.historyCoverage.complete !== true ||
+      (Array.isArray(engineResult.historyCoverage.gaps) && engineResult.historyCoverage.gaps.length > 0)) {
+    warnings.push({
+      code: 'HISTORY_INCOMPLETE',
+      text: 'Activity history coverage is incomplete or unverified.',
+      historyCoverage: engineResult.historyCoverage
+    });
+  }
   if (request.route.geometryKind === 'manual-sketch') {
     warnings.push({ code: 'MANUAL_SKETCH', text: 'Route geometry is a manual sketch, not a verified road route.' });
     assumptions.push('Маршрутът е ръчна геометрична скица, не проверен път.');

@@ -70,6 +70,22 @@ function drive(start, distanceM, roadType, stageIndex = 0) {
   };
 }
 
+function historyWithExtendedDays(count) {
+  const activities = [];
+  let time = Date.parse('2026-10-12T00:00:00Z');
+  const start = time;
+  for (let day = 0; day < count; day++) {
+    for (const [type, minutes] of [
+      ['drive', 270], ['rest', 45], ['drive', 270], ['rest', 45],
+      ['drive', 60], ['rest', 660]
+    ]) {
+      activities.push({ type, start: time, end: time + minutes * 60_000 });
+      time += minutes * 60_000;
+    }
+  }
+  return { activities, start, end: time };
+}
+
 function execute(input, engineFactory, extraDependencies = {}) {
   let received;
   const result = createMapPlan(input, {
@@ -311,6 +327,30 @@ test('engine extension and reduced-rest diagnostics pass through unchanged', () 
   assert.equal(result.engineResult.ignoredDailyRests, ignoredDailyRests);
 });
 
+test('exhausted weekly extensions remain visible from the real planner result', () => {
+  const history = historyWithExtendedDays(2);
+  const input = request({
+    nowUtcMs: history.start,
+    departureUtcMs: history.end + 60 * 60_000,
+    route: {
+      geometry: geometryFor(800_000),
+      roadSections: [{
+        id: 'section-1', fromM: 0, toM: routeLength(geometryFor(800_000)),
+        roadType: 'motorway', source: 'test'
+      }]
+    },
+    initialState: { activities: history.activities, lastWeeklyRestEnd: null, source: 'test-log' },
+    choices: {
+      breakStyle: '45', multiManning: false,
+      bySection: [{ sectionId: 'section-1', useExtension: true, dailyRest: 'regular' }]
+    }
+  });
+  const result = createMapPlan(input, dependencies);
+  assert.equal(result.state, 'estimated');
+  assert.ok(result.engineResult.ignoredExtensions.length > 0);
+  assert.equal(result.engineResult.ignoredExtensions[0].stageIndex, 0);
+});
+
 test('unsupported requirements and requested stops return no fabricated ETA', () => {
   for (const input of [
     request({ requirements: { liveTraffic: true } }),
@@ -389,6 +429,8 @@ test('engine violations remain visible and never change estimated to legal appro
   ], { violations })).result;
   assert.equal(result.state, 'estimated');
   assert.equal(result.capabilities.legalApproval, false);
+  assert.ok(result.warnings.some(item => item.code === 'ESTIMATE_ONLY'));
+  assert.ok(result.warnings.some(item => item.code === 'HISTORY_INCOMPLETE'));
   const warning = result.warnings.find(item => item.code === 'ENGINE_VIOLATIONS');
   assert.ok(warning);
   assert.equal(warning.violations, violations);
@@ -410,6 +452,7 @@ test('manual route and multi-manning assumptions remain explicit', () => {
     drive(now, length, 'ordinary')
   ])).result;
   assert.ok(result.warnings.some(warning => warning.code === 'MANUAL_SKETCH'));
+  assert.ok(result.warnings.some(warning => warning.code === 'MANUAL_ROAD_TYPE'));
   assert.ok(result.warnings.some(warning => warning.code === 'MULTI_MANNING_UNVERIFIED'));
   assert.equal(result.capabilities.legalApproval, false);
 });
