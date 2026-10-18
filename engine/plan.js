@@ -160,7 +160,8 @@ export function buildPlan({
           extensionIgnored = true;
         }
       }
-      const dailyState = analysisAt(time).status.daily;
+      const timeStatus = analysisAt(time).status;
+      const dailyState = timeStatus.daily;
       const canReduceRest = stage.dailyRest === 'reduced' && !reducedRestUsedOnStage &&
         dailyState.reducedRestsLeft > 0;
       const chosenRestDuration = canReduceRest ? LIMITS.dailyRestReduced : LIMITS.dailyRestRegular;
@@ -190,7 +191,11 @@ export function buildPlan({
           ignoredDailyRests.push({ stageIndex: index, reason: 'Етапът вече използва една намалена дневна почивка.' });
           reducedRestIgnored = true;
         }
-        if (time > restDeadline) {
+        // A recorded rest still running at this moment continues into the planned
+        // fragment. Gaps and any other activity end it, because the analyzer runs
+        // with gapsAsRest off and reports only the latest uninterrupted rest.
+        const restSince = timeStatus.activity === 'rest' ? timeStatus.currentRest.since : time;
+        if (restSince > restDeadline) {
           ignoredDailyRests.push({ code: 'DAILY_REST_DEADLINE_MISSED', stageIndex: index,
             reason: 'Срокът за избраната дневна почивка е пропуснат преди следващото управление; почивката започва веднага, без да заличава изминалия интервал.' });
           restLabel = `Дневна почивка ${restDuration / H} ч — избраният вид е извън срока`;
