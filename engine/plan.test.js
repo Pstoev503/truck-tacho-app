@@ -358,3 +358,78 @@ test('бъдещ запис не се зачита като наблюдаван
   assert.equal(result.confirmed, false);
   assert.deepEqual(result.historyCoverage.gaps, [{ start: current, end: current + H }]);
 });
+
+// PLAN-05: a recorded rest that is still running at departure is one
+// continuous rest with the planned fragment; only a real interruption or an
+// unrecorded interval moves its start to the planned fragment.
+function historyWithRestBeforeDeparture(workHours, restHours, extra = []) {
+  const dutyStart = now - (workHours + restHours) * H;
+  return [
+    {type:'rest', start:now-192*H, end:dutyStart},
+    {type:'work', start:dutyStart, end:now-restHours*H},
+    {type:'rest', start:now-restHours*H, end:now},
+    ...extra
+  ];
+}
+const missedRest = p => p.ignoredDailyRests.some(v => v.code === 'DAILY_REST_DEADLINE_MISSED');
+
+test('PLAN-05: a recorded rest begun before the deadline is continued without a missed-deadline warning', () => {
+  const p=buildPlan({stages:[stage(400)],departure:now,now,activities:historyWithRestBeforeDeparture(12,2)});
+  assert.equal(p.events[0].type,'rest');
+  assert.equal(p.events[0].start,now);
+  assert.equal(p.events[0].label,'Редовна дневна почивка 11 ч');
+  assert.equal(missedRest(p),false);
+  assert.deepEqual(p.violations,[]);
+  assert.equal(p.confirmed,true);
+});
+test('PLAN-05: a recorded rest begun exactly at the deadline counts, one minute later it is still reported', () => {
+  const exact=buildPlan({stages:[stage(400)],departure:now,now,activities:historyWithRestBeforeDeparture(13,2)});
+  assert.equal(missedRest(exact),false);
+  assert.equal(exact.confirmed,true);
+  const late=buildPlan({stages:[stage(400)],departure:now,now,activities:historyWithRestBeforeDeparture(13+1/60,2-1/60)});
+  assert.equal(missedRest(late),true);
+  assert.notEqual(late.events[0].label,'Редовна дневна почивка 11 ч');
+  assert.equal(late.confirmed,false);
+});
+test('PLAN-05: work recorded after the rest breaks its continuity and keeps the warning', () => {
+  const history=historyWithRestBeforeDeparture(12,2);
+  history[2].end=now-MIN;
+  history.push({type:'work', start:now-MIN, end:now});
+  const p=buildPlan({stages:[stage(400)],departure:now,now,activities:history});
+  assert.equal(missedRest(p),true);
+  assert.equal(p.confirmed,false);
+});
+test('PLAN-05: an unrecorded interval before a future departure is not credited as the same rest', () => {
+  const history=historyWithRestBeforeDeparture(12,2);
+  history[2].end=null; // still resting at now, unknown until departure
+  const p=buildPlan({stages:[stage(400)],departure:now+3*H,now,activities:history});
+  assert.equal(missedRest(p),true);
+  assert.equal(p.confirmed,false);
+  assert.equal(p.events[0].start,now+3*H);
+});
+test('PLAN-05: a manual rest over automatic work counts as recorded rest and the log is not mutated', () => {
+  const history=[
+    {type:'rest', start:now-192*H, end:now-14*H},
+    {type:'work', start:now-14*H, end:now},
+    {type:'rest', start:now-2*H, end:now, manual:true}
+  ];
+  const before=structuredClone(history);
+  const p=buildPlan({stages:[stage(400)],departure:now,now,activities:history});
+  assert.equal(missedRest(p),false);
+  assert.deepEqual(p.violations,[]);
+  assert.deepEqual(history,before);
+});
+test('PLAN-05: switching from a reduced to a regular section still reports the missed regular deadline', () => {
+  const p=buildPlan({stages:[stage(680,false,'reduced'),stage(400)],departure:now,now,activities:completeHistoryBeforeWork(4)});
+  assert.equal(missedRest(p),true);
+  assert.equal(p.confirmed,false);
+});
+test('PLAN-05: a ferry rest interrupted after the deadline is not credited from before the interruption', () => {
+  const history=historyWithRestBeforeDeparture(12,2);
+  history[2]={type:'rest', start:now-2*H, end:now-30*MIN, ferry:true};
+  history.push({type:'drive', start:now-30*MIN, end:now-20*MIN},
+    {type:'rest', start:now-20*MIN, end:now, ferry:true});
+  const p=buildPlan({stages:[stage(400)],departure:now,now,activities:history});
+  assert.equal(missedRest(p),true);
+  assert.equal(p.confirmed,false);
+});
