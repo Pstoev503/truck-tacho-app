@@ -13,13 +13,13 @@
     <header>
       <p class="eyebrow">Първи екран за планиране</p>
       <h1>Маршрут и ориентировъчен график</h1>
-      <p>Това е ръчна геометрична скица, не завършен truck navigator. Не проверява пътна проходимост, ограничения за камиони или правна приложимост.</p>
+      <p>Това е ръчна скица, не проверен пътен маршрут. Пътищата и ограниченията за камиони не са проверени.</p>
     </header>
 
     <section class="card">
       <h2>1. Начертай маршрута</h2>
       <p>Натисни върху картата за подредени точки. Премести маркер с плъзгане, за да редактираш линия. Нужни са поне две различни валидни точки.</p>
-      <div class="mode">Ръчна скица — без маршрутизиране, snapping или проверка на пътища</div>
+      <div class="mode">Ръчна скица — пътищата не са проверени</div>
       <div id="map" role="application" aria-label="Карта за ръчно чертане на маршрут"></div>
       <div class="controls">
         <button id="remove-last" type="button">Премахни последната точка</button>
@@ -40,7 +40,7 @@
         <label>След <input id="departure-hours" type="number" min="0" max="720" value="0"> часа и
           <input id="departure-minutes" type="number" min="0" max="59" value="0"> минути</label>
       </div>
-      <p class="notice">При планиране се отчита текущият час веднъж; относителният интервал се прибавя аритметично. Показаните часове са за Europe/Sofia.</p>
+      <p class="notice">Потегляне сега или след избран интервал. Часовете са по българско време.</p>
       <button id="plan" class="primary" type="button">Планирай</button>
       <p id="message" class="message" aria-live="polite"></p>
     </section>

@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMapPlannerController, formatSofiaTime, sampleRoute } from './map-planner.mjs';
+import { createMapPlannerController, formatSofiaTime, formatViolation, sampleRoute } from './map-planner.mjs';
 import { buildPlan } from '../engine/plan.js';
 import { indexRoute, pointAtOffset } from '../engine/route-position.js';
 import { createMapPlan } from '../engine/map-plan.js';
+import { analyze } from '../engine/tacho-rules.js';
 
 const fixedNow = Date.parse('2026-10-19T08:00:00Z');
 const dependencies = { buildPlan, indexRoute, pointAtOffset };
@@ -11,6 +12,12 @@ const coordinateForMeters = meters => meters / 6_371_000 * 180 / Math.PI;
 const makeController = overrides => createMapPlannerController({
   now: () => fixedNow,
   ...overrides
+});
+const echoed = (request, result = { state: 'needs-data' }) => ({
+  requestId: request.requestId,
+  routeRevision: request.routeRevision,
+  inputRevision: request.inputRevision,
+  ...result
 });
 const twoPoints = (controller, distanceM = 1_000) => {
   controller.addPoint({ lat: 0, lon: 0 });
@@ -54,15 +61,19 @@ test('invalid coordinate ranges are rejected', () => {
   assert.throws(() => controller.addPoint({ lat: 0, lon: NaN }), /поддържаните координати/);
 });
 
-test('road type, choices and departure changes increment input but not route revision', () => {
+test('road type changes route and input revisions; choices and departure change input only', () => {
   const controller = makeController();
   twoPoints(controller);
-  const routeRevision = controller.getState().routeRevision;
+  const initialRouteRevision = controller.getState().routeRevision;
+  const initialInputRevision = controller.getState().inputRevision;
   controller.setRoadType(0, 'motorway');
+  assert.equal(controller.getState().routeRevision, initialRouteRevision + 1);
+  assert.equal(controller.getState().inputRevision, initialInputRevision + 1);
+  const routeRevision = controller.getState().routeRevision;
   controller.setChoice('section-1', { useExtension: true, dailyRest: 'reduced' });
   controller.setDeparture({ mode: 'relative', hours: 2, minutes: 15 });
   assert.equal(controller.getState().routeRevision, routeRevision);
-  assert.equal(controller.getState().inputRevision, 5);
+  assert.equal(controller.getState().inputRevision, initialInputRevision + 3);
 });
 
 test('planning requires an explicit road type and never defaults to motorway', async () => {
@@ -78,7 +89,7 @@ test('sections use indexed spherical distances, remain contiguous, and skip dupl
   let received;
   const controller = makeController({ adapter: request => {
     received = request;
-    return { state: 'needs-data', error: { code: 'test' } };
+    return echoed(request);
   } });
   controller.addPoint({ lat: 0, lon: 0 });
   controller.addPoint({ lat: 0, lon: 0 });
@@ -95,7 +106,7 @@ test('three-point plans keep mixed road types in ordered contiguous sections', a
   let received;
   const controller = makeController({ adapter: request => {
     received = request;
-    return { state: 'needs-data' };
+    return echoed(request);
   } });
   controller.addPoint({ lat: 0, lon: 0 });
   controller.addPoint({ lat: 0, lon: coordinateForMeters(1_000) });
@@ -114,7 +125,7 @@ test('choice requests are explicit for every positive section', async () => {
   let received;
   const controller = makeController({ adapter: request => {
     received = request;
-    return { state: 'needs-data', error: { code: 'test' } };
+    return echoed(request);
   } });
   twoPoints(controller);
   controller.setRoadType(0, 'motorway');
@@ -129,7 +140,7 @@ test('relative departure samples the injected clock once and uses UTC arithmetic
   let calls = 0, received;
   const controller = makeController({
     now: () => { calls++; return fixedNow; },
-    adapter: request => { received = request; return { state: 'needs-data' }; }
+    adapter: request => { received = request; return echoed(request); }
   });
   twoPoints(controller);
   controller.setRoadType(0, 'ordinary');
@@ -163,7 +174,7 @@ test('the input geometry passed to planning is copied and not mutated', async ()
   const original = [{ lat: 0, lon: 0 }, { lat: 0, lon: coordinateForMeters(1_000) }];
   const controller = makeController({ adapter: request => {
     request.route.geometry[0].lat = 10;
-    return { state: 'needs-data' };
+    return echoed(request);
   } });
   controller.addPoint(original[0]);
   controller.addPoint(original[1]);
@@ -175,7 +186,9 @@ test('the input geometry passed to planning is copied and not mutated', async ()
 
 test('late plan is rejected after a route revision', async () => {
   let resolve;
-  const controller = readyController({ adapter: () => new Promise(done => { resolve = done; }) });
+  const controller = readyController({ adapter: request => new Promise(done => {
+    resolve = result => done(echoed(request, result));
+  }) });
   const pending = controller.plan();
   controller.dragPoint(1, { lat: 0, lon: 0.02 });
   resolve({ state: 'estimated', arrivalUtcMs: fixedNow });
@@ -185,7 +198,8 @@ test('late plan is rejected after a route revision', async () => {
 
 test('late plan is rejected after input change and after a newer request', async () => {
   const resolvers = [];
-  const controller = readyController({ adapter: () => new Promise(resolve => resolvers.push(resolve)) });
+  const controller = readyController({ adapter: request => new Promise(resolve =>
+    resolvers.push(result => resolve(echoed(request, result)))) });
   const first = controller.plan();
   controller.setDeparture({ mode: 'relative', hours: 1, minutes: 0 });
   const second = controller.plan();
@@ -217,7 +231,11 @@ test('warnings, violations, and ignored choices remain available from the engine
       ...dependencies,
       buildPlan: options => {
         const result = buildPlan(options);
-        result.violations = [{ code: 'DAILY_DRIVING' }];
+        result.violations = analyze([{
+          type: 'drive',
+          start: fixedNow - 271 * 60_000,
+          end: fixedNow
+        }], { now: fixedNow }).violations;
         result.ignoredExtensions = [{ stageIndex: 0, reason: 'Изчерпани удължения.' }];
         return result;
       }
@@ -226,8 +244,40 @@ test('warnings, violations, and ignored choices remain available from the engine
   controller.setChoice('section-1', { useExtension: true, dailyRest: 'regular' });
   const planned = await controller.plan();
   assert.ok(planned.result.warnings.some(warning => warning.code === 'ENGINE_VIOLATIONS'));
-  assert.equal(planned.result.engineResult.violations[0].code, 'DAILY_DRIVING');
+  assert.equal(planned.result.engineResult.violations[0].code, 'CONTINUOUS_DRIVE');
+  assert.equal(formatViolation(planned.result.engineResult.violations[0]),
+    'Време за непрекъснато управление: Над 4 ч 30 мин каране без пауза 45 мин (или 15 + 30 мин)');
   assert.equal(planned.result.engineResult.ignoredExtensions[0].reason, 'Изчерпани удължения.');
+});
+
+async function assertEchoRejected(id) {
+  let received;
+  const controller = readyController({ adapter: request => {
+    received = request;
+    return echoed(request, {
+      state: 'estimated',
+      arrivalUtcMs: fixedNow + 1_000,
+      [id]: 'wrong-echo'
+    });
+  } });
+  const planned = await controller.plan();
+  assert.equal(planned.accepted, false);
+  assert.equal(planned.result, null);
+  assert.match(planned.error, /Не получих актуален план/);
+  assert.equal(controller.getState().result, null);
+  assert.notEqual(received[id], 'wrong-echo');
+}
+
+test('rejects a result with a mismatched requestId echo', async () => {
+  await assertEchoRejected('requestId');
+});
+
+test('rejects a result with a mismatched routeRevision echo', async () => {
+  await assertEchoRejected('routeRevision');
+});
+
+test('rejects a result with a mismatched inputRevision echo', async () => {
+  await assertEchoRejected('inputRevision');
 });
 
 test('display route uses spherical indexed points including original endpoints', () => {

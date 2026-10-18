@@ -142,7 +142,7 @@ export function createMapPlannerController({
       if (roadType !== null && !ROAD_TYPES.has(roadType)) throw new TypeError('Невалиден тип път.');
       if (roadTypes[edgeIndex] === roadType) return;
       roadTypes[edgeIndex] = roadType;
-      invalidate(false);
+      invalidate(true);
     },
     setChoice(sectionId, nextChoice) {
       if (typeof sectionId !== 'string' || !/^section-\d+$/.test(sectionId) ||
@@ -193,6 +193,15 @@ export function createMapPlannerController({
             routeRevision !== Number(requestedRouteRevision.slice(6)) ||
             inputRevision !== Number(requestedInputRevision.slice(6))) {
           return { accepted: false, stale: true, result: planned };
+        }
+        if (planned?.requestId !== requestId ||
+            planned?.routeRevision !== requestedRouteRevision ||
+            planned?.inputRevision !== requestedInputRevision) {
+          activeRequestId = null;
+          error = 'Не получих актуален план за този маршрут. Опитай отново.';
+          result = null;
+          notify();
+          return { accepted: false, result: null, error };
         }
         result = planned;
         error = planned?.error ? userError(planned) : null;
@@ -252,12 +261,24 @@ const warningText = {
   MULTI_MANNING_UNVERIFIED: 'Данните за екипаж не са независимо потвърдени.',
   ENGINE_VIOLATIONS: 'Двигателят е отчел потенциални нарушения; графикът не е правно одобрение.'
 };
-const violationText = {
-  CONTINUOUS_DRIVING: 'Отчетено е нарушение на времето за непрекъснато управление.',
-  DAILY_DRIVING: 'Отчетено е нарушение на дневното време за управление.',
-  WEEKLY_DRIVING: 'Отчетено е нарушение на седмичното време за управление.',
-  FORTNIGHTLY_DRIVING: 'Отчетено е нарушение на времето за управление за две седмици.'
+const violationLabels = {
+  CONTINUOUS_DRIVE: 'Време за непрекъснато управление',
+  DAILY_DRIVE: 'Дневно време за управление',
+  DAILY_DRIVE_EXT: 'Дневни удължения на управлението',
+  DAILY_REST: 'Срок за дневна почивка',
+  REDUCED_DAILY_RESTS: 'Брой намалени дневни почивки',
+  WEEKLY_DRIVE: 'Седмично време за управление',
+  FORTNIGHT_DRIVE: 'Време за управление за две седмици',
+  WEEKLY_REST_LATE: 'Срок за седмична почивка',
+  CONSECUTIVE_REDUCED_WEEKLY: 'Последователни намалени седмични почивки',
+  COMPENSATION: 'Срок за компенсация на седмична почивка'
 };
+
+export function formatViolation(violation) {
+  const label = violationLabels[violation?.code] ?? 'Отчетено е нарушение';
+  const detail = typeof violation?.detail === 'string' ? violation.detail.trim() : '';
+  return detail ? `${label}: ${detail}` : label;
+}
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -384,7 +405,7 @@ function renderSchedule(result) {
     $('times').textContent = '';
     return;
   }
-  $('times').textContent = `Потегляне: ${formatSofiaTime(result.engineResult.departure)} · Пристигане (оценка): ${formatSofiaTime(result.arrivalUtcMs)} · Europe/Sofia`;
+  $('times').textContent = `Потегляне: ${formatSofiaTime(result.engineResult.departure)} · Пристигане (оценка): ${formatSofiaTime(result.arrivalUtcMs)} · българско време`;
   for (const warning of result.warnings) warnings.append(element('li', warningText[warning.code] ?? 'Има предупреждение към този ориентировъчен план.'));
   for (const [index, event] of result.events.entries()) {
     const source = result.engineResult.events[index];
@@ -395,7 +416,7 @@ function renderSchedule(result) {
   }
   const violations = result.engineResult.violations ?? [];
   for (const violation of violations) {
-    warnings.append(element('li', violationText[violation.code] ?? 'Двигателят е отчел потенциално нарушение; подробностите не са правно становище.'));
+    warnings.append(element('li', formatViolation(violation)));
   }
   for (const item of [...(result.engineResult.ignoredExtensions ?? []), ...(result.engineResult.ignoredDailyRests ?? [])]) {
     warnings.append(element('li', `Изборът за участък ${(item.stageIndex ?? 0) + 1} не е приложен: ${item.reason}`));
