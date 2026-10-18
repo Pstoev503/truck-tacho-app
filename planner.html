@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="bg">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <title>Ръчна скица и ориентировъчен график</title>
+  <link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css">
+  <link rel="stylesheet" href="ui/map-planner.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Първи екран за планиране</p>
+      <h1>Маршрут и ориентировъчен график</h1>
+      <p>Това е ръчна геометрична скица, не завършен truck navigator. Не проверява пътна проходимост, ограничения за камиони или правна приложимост.</p>
+    </header>
+
+    <section class="card">
+      <h2>1. Начертай маршрута</h2>
+      <p>Натисни върху картата за подредени точки. Премести маркер с плъзгане, за да редактираш линия. Нужни са поне две различни валидни точки.</p>
+      <div class="mode">Ръчна скица — без маршрутизиране, snapping или проверка на пътища</div>
+      <div id="map" role="application" aria-label="Карта за ръчно чертане на маршрут"></div>
+      <div class="controls">
+        <button id="remove-last" type="button">Премахни последната точка</button>
+        <button id="clear-route" class="secondary" type="button">Изчисти маршрута</button>
+      </div>
+      <ol id="points" aria-label="Точки по маршрута"></ol>
+      <div id="sections" class="sections" aria-label="Участъци и избори"></div>
+    </section>
+
+    <section class="card">
+      <h2>2. Потегляне</h2>
+      <label for="departure-mode">Час на потегляне</label>
+      <select id="departure-mode">
+        <option value="now">Сега</option>
+        <option value="relative">След избран интервал</option>
+      </select>
+      <div id="relative-inputs" class="relative-inputs" hidden>
+        <label>След <input id="departure-hours" type="number" min="0" max="720" value="0"> часа и
+          <input id="departure-minutes" type="number" min="0" max="59" value="0"> минути</label>
+      </div>
+      <p class="notice">При планиране се отчита текущият час веднъж; относителният интервал се прибавя аритметично. Показаните часове са за Europe/Sofia.</p>
+      <button id="plan" class="primary" type="button">Планирай</button>
+      <p id="message" class="message" aria-live="polite"></p>
+    </section>
+
+    <section id="schedule-card" class="card" hidden>
+      <h2>Ориентировъчен график</h2>
+      <p class="caution">Ориентировъчно изчисление — не е потвърждение на право или законно съответствие.</p>
+      <p id="times"></p>
+      <ul id="warnings" class="warnings"></ul>
+      <h3>Планирани действия</h3>
+      <ol id="schedule"></ol>
+      <h3>Допускания</h3>
+      <ul id="assumptions"></ul>
+    </section>
+  </main>
+  <script src="vendor/leaflet-1.9.4/leaflet.js"></script>
+  <script type="module" src="ui/map-planner.mjs"></script>
+</body>
+</html>
