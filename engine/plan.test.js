@@ -3,6 +3,115 @@ import assert from 'node:assert/strict';
 import { buildPlan, routeStageDistances } from './plan.js';
 import { H, MIN } from './tacho-rules.js';
 
+function completeHistoryBeforeWork(hours) {
+  return [
+    {type:'rest', start:now-192*H, end:now-hours*H},
+    {type:'work', start:now-hours*H, end:now}
+  ];
+}
+test('PLAN-04: six hours of prior work limit regular rest start to seven hours after departure', () => {
+  const p=buildPlan({stages:[stage(760)],departure:now,now,activities:completeHistoryBeforeWork(6)});
+  const r=p.events.find(e=>e.label==='Редовна дневна почивка 11 ч');
+  assert.equal(r.start,now+7*H);
+  assert.equal(r.end,now+18*H);
+  assert(!p.violations.some(v=>v.code==='DAILY_REST'));
+  assert.equal(p.drivingMs,9.5*H);
+});
+test('PLAN-04: regular selection does not silently consume a reduced rest after four hours of work', () => {
+  const p=buildPlan({stages:[stage(960)],departure:now,now,activities:completeHistoryBeforeWork(4)});
+  const r=p.events.find(e=>e.label==='Редовна дневна почивка 11 ч');
+  assert.equal(r.start,now+9*H);
+  assert.equal(p.status.daily.reducedRestsUsed,0);
+  assert.equal(p.ignoredDailyRests.length,0);
+});
+test('PLAN-04: selected reduced rest uses its nine hour deadline and allowance once', () => {
+  const p=buildPlan({stages:[stage(960,false,'reduced')],departure:now,now,activities:completeHistoryBeforeWork(6)});
+  const r=p.events.find(e=>e.label==='Намалена дневна почивка 9 ч');
+  assert.equal(r.start,now+9*H);
+  assert.equal(r.end-r.start,9*H);
+  assert.equal(p.status.daily.reducedRestsUsed,1);
+  assert(!p.violations.some(v=>v.code==='DAILY_REST'));
+});
+test('PLAN-04: exhausted reduced allowance uses the regular deadline and explains fallback', () => {
+  const h=historyWithReducedRests(3);
+  const t=h.end+6*H;
+  const activities=[...h.log,{type:'work',start:h.end,end:t}];
+  const p=buildPlan({stages:[stage(760,false,'reduced')],departure:t,now:t,activities});
+  const r=p.events.find(e=>e.label==='Редовна дневна почивка 11 ч');
+  assert.equal(r.start,t+7*H);
+  assert(p.ignoredDailyRests.some(v=>v.reason.includes('трите')));
+  assert(!p.events.some(e=>e.label==='Намалена дневна почивка 9 ч'));
+});
+test('PLAN-04: daily rest replaces the redundant short break at the daily driving limit', () => {
+  const p=buildPlan({stages:[stage(960)],departure:now,now,activities:completeHistoryBeforeWork(0)});
+  const rests=p.events.filter(e=>e.type==='rest');
+  assert.deepEqual(rests.map(e=>e.end-e.start),[45*MIN,11*H]);
+  assert.equal(p.arrival,now+23.75*H);
+});
+test('PLAN-04: split break cannot push the chosen daily rest past its deadline', () => {
+  const p=buildPlan({stages:[stage(720)],departure:now,now,activities:completeHistoryBeforeWork(8.75),breakStyle:'15+30'});
+  const firstRest=p.events.find(e=>e.type==='rest');
+  assert.equal(firstRest.start,now+4*H);
+  assert.equal(firstRest.end-firstRest.start,11*H);
+  assert(!p.violations.some(v=>v.code==='DAILY_REST'));
+});
+test('PLAN-04: adjacent road sections share the daily rest deadline', () => {
+  const p=buildPlan({stages:[stage(240),stage(480)],departure:now,now,activities:completeHistoryBeforeWork(6)});
+  const r=p.events.find(e=>e.label==='Редовна дневна почивка 11 ч');
+  assert.equal(r.stageIndex,1);
+  assert.equal(r.start,now+7*H);
+  assert.equal(p.drivingMs,9*H);
+});
+test('PLAN-04: at the regular rest deadline, rest starts immediately before any drive', () => {
+  const p=buildPlan({stages:[stage(80)],departure:now,now,activities:completeHistoryBeforeWork(13)});
+  assert.equal(p.events[0].type,'rest');
+  assert.equal(p.events[0].start,now);
+  assert.equal(p.events[0].label,'Редовна дневна почивка 11 ч');
+});
+test('PLAN-04: one minute beyond the regular deadline is explicitly reported, never labelled regular', () => {
+  const p=buildPlan({stages:[stage(80)],departure:now,now,activities:completeHistoryBeforeWork(13+1/60)});
+  assert.equal(p.events[0].type,'rest');
+  assert.equal(p.events[0].start,now);
+  assert.notEqual(p.events[0].label,'Редовна дневна почивка 11 ч');
+  assert(p.ignoredDailyRests.some(v=>v.code==='DAILY_REST_DEADLINE_MISSED'));
+  assert.equal(p.confirmed,false);
+});
+test('PLAN-04: an already missed minimum rest window remains a violation after immediate rest', () => {
+  const p=buildPlan({stages:[stage(80)],departure:now,now,activities:completeHistoryBeforeWork(16)});
+  assert.equal(p.events[0].type,'rest');
+  assert.equal(p.events[0].start,now);
+  assert(p.violations.some(v=>v.code==='DAILY_REST'));
+  assert.equal(p.confirmed,false);
+});
+
+test('PLAN-04: one minute before the regular deadline permits only one minute of driving', () => {
+  const p=buildPlan({stages:[stage(80)],departure:now,now,activities:completeHistoryBeforeWork(13-1/60)});
+  assert.equal(p.events[0].type,'drive');
+  assert.equal(p.events[0].end-p.events[0].start,MIN);
+  assert.equal(p.events[1].start,now+MIN);
+  assert.equal(p.events[1].end-p.events[1].start,11*H);
+});
+test('PLAN-04: crew option uses the existing 30 hour window while respecting regular choice', () => {
+  const p=buildPlan({stages:[stage(720)],departure:now,now,activities:completeHistoryBeforeWork(16),multiManning:true});
+  const r=p.events.find(e=>e.label==='Редовна дневна почивка 11 ч');
+  assert.equal(r.start,now+3*H);
+  assert(!p.violations.some(v=>v.code==='DAILY_REST'));
+});
+test('PLAN-04: route finishing exactly at rest deadline adds no fictional post-arrival rest', () => {
+  const p=buildPlan({stages:[stage(80)],departure:now,now,activities:completeHistoryBeforeWork(12)});
+  assert.equal(p.arrival,now+H);
+  assert.equal(p.events.length,1);
+  assert.equal(p.events[0].type,'drive');
+});
+
+test('PLAN-04: an unused extension is not consumed when daily rest takes precedence over the break', () => {
+  const p=buildPlan({stages:[stage(800,true)],departure:now,now,activities:completeHistoryBeforeWork(2.5)});
+  assert.equal(p.extendedDuties.length,0);
+  assert.equal(p.stages[0].extensionUsed,false);
+  assert.equal(p.drivingMs,10*H);
+});
+
+
 const now = Date.parse('2026-10-12T00:00:00Z');
 const departure = now + 7 * H;
 const stage = (distanceKm, useExtension = false, dailyRest = 'regular') => ({
