@@ -200,3 +200,52 @@ test('геометрията се разпределя между точките
   assert.ok(Math.abs(distances[0] - distances[1]) < 0.01);
   assert.equal(routeStageDistances({ waypoints: route.waypoints }), null);
 });
+
+test('стар начален запис не потвърждава история с вътрешна празнина', () => {
+  const from = Date.parse('2026-10-05T00:00:00Z');
+  const gapStart = from + 48 * H;
+  const gapEnd = gapStart + 24 * H;
+  const current = Date.parse('2026-10-12T09:00:00Z');
+  const result = buildPlan({
+    stages: [stage(80)], now: current, departure: current, lastWeeklyRestEnd: current,
+    activities: [{ type: 'rest', start: from, end: gapStart },
+      { type: 'rest', start: gapEnd, end: current }]
+  });
+  assert.equal(result.confirmed, false);
+  assert.equal(result.historyCoverage.complete, false);
+  assert.deepEqual(result.historyCoverage.gaps, [{ start: gapStart, end: gapEnd }]);
+});
+
+test('пълната история с пресичащи се записи се проверява като обединение на интервали', () => {
+  const from = Date.parse('2026-10-05T00:00:00Z');
+  const current = Date.parse('2026-10-12T09:00:00Z');
+  const result = buildPlan({
+    stages: [stage(80)], now: current, departure: current, lastWeeklyRestEnd: current,
+    activities: [{ type: 'rest', start: from, end: from + 72 * H },
+      { type: 'rest', start: from + 48 * H, end: null }]
+  });
+  assert.equal(result.historyCoverage.complete, true);
+  assert.deepEqual(result.historyCoverage.gaps, []);
+});
+
+test('известен краен запис не прикрива липсващото начало на историята', () => {
+  const from = Date.parse('2026-10-05T00:00:00Z');
+  const current = Date.parse('2026-10-12T09:00:00Z');
+  const result = buildPlan({
+    stages: [stage(80)], now: current, departure: current, lastWeeklyRestEnd: current,
+    activities: [{ type: 'rest', start: from + H, end: current }]
+  });
+  assert.equal(result.confirmed, false);
+  assert.deepEqual(result.historyCoverage.gaps, [{ start: from, end: from + H }]);
+});
+
+test('бъдещ запис не се зачита като наблюдавана история', () => {
+  const from = Date.parse('2026-10-05T00:00:00Z');
+  const current = Date.parse('2026-10-12T09:00:00Z');
+  const result = buildPlan({
+    stages: [stage(80)], now: current, departure: current + H, lastWeeklyRestEnd: current,
+    activities: [{ type: 'rest', start: from, end: current + H }]
+  });
+  assert.equal(result.confirmed, false);
+  assert.deepEqual(result.historyCoverage.gaps, [{ start: current, end: current + H }]);
+});
