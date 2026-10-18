@@ -15,10 +15,7 @@ Traffic Intelligence (TI) приема нормализирани пътни с�
 | Поле | Изискване |
 |---|---|
 | `contractVersion` | точно `0.1` |
-| `requestId` | уникален за всеки опит | 
-| `evaluationCycle` | нов непрозрачен ID за всеки входен цикъл, дори при същата routeRevision | 
-| `inputRevision` | ID на конкретния вход (времена, почивки, история) в цикъла | 
-| `attempt` | цяло число 1..3 в рамките на evaluationCycle |
+| `requestId` | уникален за заявката, за трасировка |
 | `routeRevision` | непрозрачен, неизменен идентификатор на конкретната версия на маршрута |
 | `departureAt` | UTC дата/час на потегляне |
 | `vehicleProfileRef` | препратка към профил; не се изпращат лични данни |
@@ -32,13 +29,13 @@ TI **не изчислява сам почивките**. При първона�
 
 ## 3. Отговор
 
-`requestId`, `routeRevision`, `evaluationCycle`, `inputRevision`, `attempt`, `evaluatedAt` (UTC), `segments[]` в същия ред, `summaryStatus` (`fresh|stale|unavailable|unknown`), `warnings[]`. За всеки сегмент:
+`requestId`, `routeRevision`, `evaluatedAt` (UTC), `segments[]` в същия ред, `summaryStatus` (`fresh|stale|unavailable|unknown`), `warnings[]`. За всеки сегмент:
 
 - `segmentRef`, `sequence`, `status` (`fresh|stale|unavailable|unknown`), `matching` (`matched|ambiguous|unmatched`) и `matchConfidence` (0..1 или `null`), `expectedEntryAt` (echo).
-- `routingBase`: `{candidateRef,kind:"routing_base",durationSeconds,source}`; `source` обозначава routing engine, не доставчик на трафик.
-- `measured`, `historical`, `forecast`: независими кандидати за **пълно време за преминаване на сегмента**, всеки `{candidateRef,kind,status,durationSeconds,source,observedAt,publishedAt,receivedAt,validFrom,validTo,generatedAt,horizonSeconds}`. Полета, които не важат, са `null`. При forecast `generatedAt` и `horizonSeconds` са задължителни, ако forecast е наличен; до валидиран модел `forecast.status="unavailable"`.
-- `incidents[]`: `{eventRef,eventVersion,lifecycle,effectKind,closure,baseCandidateRef,replacementDurationSeconds,adjustmentSeconds,alreadyIncludedIn,independenceEvidenceRef,source,validFrom,validTo,matchConfidence}`. `closure` е `open|closed|unknown`; `adjustmentSeconds` може да е число само при обоснована, независима оценка и `effectKind="adjustment"`.
-- `selected`: `{candidateRef,baseCandidateRef,appliedEventRefs,kind,status,durationSeconds,source,selectionReason}` — кандидатът, избран според правилата в §4; `durationSeconds:null` ако няма надеждна оценка.
+- `routingBase`: `{kind:"routing_base",durationSeconds,source}`; `source` обозначава routing engine, не доставчик на трафик.
+- `measured`, `historical`, `forecast`: независими кандидати за **пълно време за преминаване на сегмента**, всеки `{kind,status,durationSeconds,source,observedAt,publishedAt,receivedAt,validFrom,validTo,generatedAt,horizonSeconds}`. Полета, които не важат, са `null`. При forecast `generatedAt` и `horizonSeconds` са задължителни, ако forecast е наличен; до валидиран модел `forecast.status="unavailable"`.
+- `incidents[]`: `{eventRef,eventVersion,lifecycle,effectKind,closure,adjustmentSeconds,alreadyIncludedIn,source,validFrom,validTo,matchConfidence}`. `closure` е `open|closed|unknown`; `adjustmentSeconds` може да е число само при обоснована, независима оценка и `effectKind="adjustment"`.
+- `selected`: `{kind,status,durationSeconds,source,selectionReason}` — кандидатът, избран според правилата в §4; `durationSeconds:null` ако няма надеждна оценка.
 - `passability`: `open|closed|unknown`, `vehicleApplicability`: `covered|not_covered|unknown`, `provenance[]`.
 
 Всяко ненулево числово поле за време/скорост/ефект има изрични `kind` и `source` в своя обект. `source` съдържа `{sourceId,recordId,recordVersion,licenseRef}`; при вътрешен routing base `sourceId="routing-engine"`. За извлечени данни provenance записва `transformationId` и входните source refs. Суров брой МПС (`vehicleCount`) може да бъде метаданни със собствен `kind="count"` и период, но **никога** не се конвертира директно в скорост или ETA.
@@ -47,15 +44,7 @@ TI **не изчислява сам почивките**. При първона�
 
 **Правило:** `routingBase`, `measured`, `historical` и `forecast` са алтернативни *пълни продължителности* за същия сегмент, а не суми. TI избира **един** допустим кандидат. Предложен ред при съвпадащ сегмент, посока, времеви прозорец и профил: валидно измерване, ако е представително за `expectedEntryAt`; иначе валидирана прогноза; иначе историческа оценка; иначе routing base. Измерване „сега“ не е автоматично представително за далечно бъдещо навлизане. Кандидатът трябва да носи времеви статус и обоснована приложимост.
 
-**Референции:** Всеки пълен кандидат има уникален в отговора `candidateRef` (напр. `measured:s1`); при промяна на стойността ref се сменя. `baseCandidateRef` сочи точно съществуващ `candidateRef` или е `null`. `alreadyIncludedIn` е масив от candidate refs; празен масив НЕ доказва независимост. `independenceEvidenceRef` е проверима препратка или `null`. `effectKind` е `replacement|adjustment|none`. **Затварянето е ограничение за проходимост, не числов ефект:** `closure="closed"` изисква `effectKind="none"`, `replacementDurationSeconds=null`, `adjustmentSeconds=null`, `baseCandidateRef=null` и `independenceEvidenceRef=null`.
-
-- `replacement`: `replacementDurationSeconds` е пълната продължителност (цяло число >=0), `adjustmentSeconds=null`, `baseCandidateRef=null`; създава алтернативен кандидат `replacement:<eventRef>:<eventVersion>`, никога добавка.
-- `adjustment`: `replacementDurationSeconds=null`, `adjustmentSeconds` е цяло число (вкл. отрицателно), `baseCandidateRef` съвпада с избрания пълен кандидат, `independenceEvidenceRef` е проверим и ненулев; ако ref е в `alreadyIncludedIn` или доказателството липсва, ефектът се блокира.
-- `none`: `replacementDurationSeconds=null`, `adjustmentSeconds=null`, `baseCandidateRef=null`.
-
-**Алгоритъм:** (1) филтрирай по route segment, посока, време, профил, lifecycle и freshness; (2) потвърдено `closed` дава `selected.durationSeconds=null`; (3) разгледай routing base, measured, historical, validated forecast и replacement като алтернативни **пълни** времена; избери един приложим кандидат по приоритета и специфичността; (4) приложи adjustment само към точно посочения избран кандидат, с независимо доказателство и без вече включен или корелиран ефект, при резултат >=0; (5) `selected.candidateRef` е избраният ref или `derived:<baseCandidateRef>:<eventRef>`, `selected.baseCandidateRef` е `null` без приложен adjustment, `selected.appliedEventRefs` е списъкът на приложените ефекти; `selected.source` посочва избрания/изведения запис, а `provenance[]` **задължително** съдържа отделни записи за входния кандидат (`candidateRef`, `sourceId`, `recordId`, `recordVersion`, `licenseRef`), приложения incident (`eventRef`, `eventVersion`, `sourceId`, `recordId`, `recordVersion`, `licenseRef`) и, за приложен adjustment, доказателството (`independenceEvidenceRef`, `sourceId`, `recordId`, `recordVersion`, `licenseRef`). При replacement се записва incident lineage; при blocked adjustment не се измисля evidence и `appliedEventRefs=[]`. При неясна независимост избраното време не се променя и се връща `possible_double_count`.
-
-**Passability:** `open` изисква изрично положително доказателство за проходимост в `provenance[]` със source, посока, профил и валидност за expectedEntryAt. Празен `incidents[]`, измерено или историческо време не доказват open. Без такова доказателство `passability=unknown`.
+`incident.effectKind="replacement"` означава, че incident provider дава самостоятелно **пълно** време за сегмента; това е алтернативен кандидат, а не добавка. `incident.effectKind="adjustment"` означава независима добавка/изваждане към **изрично посочен** `baseCandidateRef`; допустимо е само ако `alreadyIncludedIn` не съдържа избрания кандидат и произходът доказва независимост. Ако не може да се докаже — `adjustmentSeconds:null`, предупреждение `possible_double_count`; не се прилага корекция. Затваряне (`closure="closed"`) е **constraint**, не безкрайно число за ETA; `passability="closed"`, `selected.durationSeconds:null`, planner трябва да преразгледа маршрута. При conflicting closure/open данни без надеждно разрешение `passability="unknown"`, `warnings` включва `conflicting_passability`, а не се предполага проходимост.
 
 **Забрана:** `selected.durationSeconds = routingBase + (measured - routingBase) + incidentDelay`, когато измерването вече включва инцидента. Ако `vehicleApplicability` е `not_covered` или `unknown`, не се твърди truck-safe ETA и не се прилага непроверен профилно-зависим ефект.
 
@@ -74,7 +63,7 @@ TI **не изчислява сам почивките**. При първона�
 
 Matching изисква съвместими **геометрия + посока + пътна идентичност/ниво**, когато са налични. Геометрично близък успореден път, насрещна посока и пресичане на мост/тунел на различно ниво **не** са достатъчно доказателство. Съхранява се `matchConfidence`; при двусмисленост `matching="ambiguous"`, `passability="unknown"` за спорен constraint, без автоматично прехвърляне на инцидента. `matchConfidence` не е измерена вероятност без калибрация.
 
-Planner подава `expectedEntryAt` за всеки сегмент след предишните етапи и почивки. Лимитът е **3 опита за един `(routeRevision,evaluationCycle)`**, а НЕ за живота на routeRevision. Всеки опит има нов `requestId`, монотонен `attempt` (1..3), а при променен вход — нов `inputRevision`. Нова departure/почивка/история започва нов `evaluationCycle` дори при същия маршрут и получава нов бюджет от 3. Planner приема отговор само при точно съвпадение на активните `routeRevision`, `evaluationCycle`, `inputRevision`, `attempt` и `requestId`; стар опит се отхвърля. При <=60 s промяна на ETA и непроменена passability може да спре рано; при осцилация/несходимост след опит 3 — `unstable_estimate`. TI не изчислява почивки.
+Planner подава `expectedEntryAt` за всеки сегмент след предишни сегменти и планирани почивки. При променено ETA planner може да извика TI отново с актуализирани времена, **максимум 3 общи оценки на една routeRevision** (първоначална + 2 повторения). Ако промяната на общото ETA между последните две оценки е <=60 секунди и няма смяна на passability, може да спре по-рано. При осцилация, смяна на кандидати или липса на сходимост се връща/отбелязва `unstable_estimate`; не се прикрива като точна прогноза. Нова routeRevision е нов цикъл; отговор за стара revision **не се прилага** към текущия маршрут. При закъснял response `requestId` и `routeRevision` се проверяват от planner.
 
 ## 7. Версиониране, непокрити случаи и примери
 

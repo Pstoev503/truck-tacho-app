@@ -37,10 +37,7 @@
       "baseDurationSeconds": 300,
       "expectedEntryAt": "2026-10-19T08:30:00Z"
     }
-  ],
-  "evaluationCycle": "syn-cycle-1",
-  "inputRevision": "syn-input-1-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -69,8 +66,7 @@
           "recordId": "syn-record-1",
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
-        },
-        "candidateRef": "routingBase:syn-seg-001"
+        }
       },
       "measured": {
         "kind": "measured",
@@ -89,8 +85,7 @@
         "validFrom": "2026-10-19T08:00:00Z",
         "validTo": "2026-10-19T09:00:00Z",
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "measured:syn-seg-001"
+        "horizonSeconds": null
       },
       "historical": {
         "kind": "historical",
@@ -109,8 +104,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "historical:syn-seg-001"
+        "horizonSeconds": null
       },
       "forecast": {
         "kind": "forecast",
@@ -124,8 +118,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "forecast:syn-seg-001"
+        "horizonSeconds": null
       },
       "incidents": [],
       "selected": {
@@ -139,12 +132,9 @@
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
         },
-        "selectionReason": "representative_measurement",
-        "candidateRef": "measured:syn-seg-001",
-        "baseCandidateRef": null,
-        "appliedEventRefs": []
+        "selectionReason": "representative_measurement"
       },
-      "passability": "unknown",
+      "passability": "open",
       "vehicleApplicability": "covered",
       "provenance": [
         {
@@ -156,10 +146,7 @@
       ]
     }
   ],
-  "warnings": [],
-  "evaluationCycle": "syn-cycle-1",
-  "inputRevision": "syn-input-1-1",
-  "attempt": 1
+  "warnings": []
 }
 ```
 
@@ -194,10 +181,7 @@
       "baseDurationSeconds": 300,
       "expectedEntryAt": "2026-10-19T08:30:00Z"
     }
-  ],
-  "evaluationCycle": "syn-cycle-2",
-  "inputRevision": "syn-input-2-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -226,8 +210,7 @@
           "recordId": "syn-record-2",
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
-        },
-        "candidateRef": "routingBase:syn-seg-001"
+        }
       },
       "measured": {
         "kind": "measured",
@@ -246,8 +229,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "measured:syn-seg-001"
+        "horizonSeconds": null
       },
       "historical": {
         "kind": "historical",
@@ -266,8 +248,7 @@
         "validFrom": "2026-10-19T08:00:00Z",
         "validTo": "2026-10-19T09:00:00Z",
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "historical:syn-seg-001"
+        "horizonSeconds": null
       },
       "forecast": {
         "kind": "forecast",
@@ -281,8 +262,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "forecast:syn-seg-001"
+        "horizonSeconds": null
       },
       "incidents": [],
       "selected": {
@@ -296,12 +276,9 @@
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
         },
-        "selectionReason": "live_unavailable_or_stale",
-        "candidateRef": "historical:syn-seg-001",
-        "baseCandidateRef": null,
-        "appliedEventRefs": []
+        "selectionReason": "live_unavailable_or_stale"
       },
-      "passability": "unknown",
+      "passability": "open",
       "vehicleApplicability": "covered",
       "provenance": [
         {
@@ -315,10 +292,7 @@
   ],
   "warnings": [
     "no_live_feed"
-  ],
-  "evaluationCycle": "syn-cycle-2",
-  "inputRevision": "syn-input-2-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -353,10 +327,7 @@
       "baseDurationSeconds": 300,
       "expectedEntryAt": "2026-10-19T08:30:00Z"
     }
-  ],
-  "evaluationCycle": "syn-cycle-3",
-  "inputRevision": "syn-input-3-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -385,8 +356,7 @@
           "recordId": "syn-record-3",
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
-        },
-        "candidateRef": "routingBase:syn-seg-001"
+        }
       },
       "measured": {
         "kind": "measured",
@@ -405,8 +375,7 @@
         "validFrom": "2026-10-19T08:00:00Z",
         "validTo": "2026-10-19T09:00:00Z",
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "measured:syn-seg-001"
+        "horizonSeconds": null
       },
       "historical": {
         "kind": "historical",
@@ -425,8 +394,7 @@
         "validFrom": "2026-10-19T08:00:00Z",
         "validTo": "2026-10-19T09:00:00Z",
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "historical:syn-seg-001"
+        "horizonSeconds": null
       },
       "forecast": {
         "kind": "forecast",
@@ -440,8 +408,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "forecast:syn-seg-001"
+        "horizonSeconds": null
       },
       "incidents": [],
       "selected": {
@@ -455,12 +422,9 @@
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
         },
-        "selectionReason": "live_unavailable_or_stale",
-        "candidateRef": "historical:syn-seg-001",
-        "baseCandidateRef": null,
-        "appliedEventRefs": []
+        "selectionReason": "live_unavailable_or_stale"
       },
-      "passability": "unknown",
+      "passability": "open",
       "vehicleApplicability": "covered",
       "provenance": [
         {
@@ -474,10 +438,7 @@
   ],
   "warnings": [
     "stale_measurement"
-  ],
-  "evaluationCycle": "syn-cycle-3",
-  "inputRevision": "syn-input-3-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -512,10 +473,7 @@
       "baseDurationSeconds": 300,
       "expectedEntryAt": "2026-10-19T08:30:00Z"
     }
-  ],
-  "evaluationCycle": "syn-cycle-4",
-  "inputRevision": "syn-input-4-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -544,8 +502,7 @@
           "recordId": "syn-record-4",
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
-        },
-        "candidateRef": "routingBase:syn-seg-001"
+        }
       },
       "measured": {
         "kind": "measured",
@@ -564,8 +521,7 @@
         "validFrom": "2026-10-19T08:00:00Z",
         "validTo": "2026-10-19T09:00:00Z",
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "measured:syn-seg-001"
+        "horizonSeconds": null
       },
       "historical": {
         "kind": "historical",
@@ -584,8 +540,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "historical:syn-seg-001"
+        "horizonSeconds": null
       },
       "forecast": {
         "kind": "forecast",
@@ -599,15 +554,14 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "forecast:syn-seg-001"
+        "horizonSeconds": null
       },
       "incidents": [
         {
           "eventRef": "syn-closure-1",
           "eventVersion": "2",
           "lifecycle": "active",
-          "effectKind": "none",
+          "effectKind": "constraint",
           "closure": "closed",
           "adjustmentSeconds": null,
           "alreadyIncludedIn": [],
@@ -619,10 +573,7 @@
           },
           "validFrom": "2026-10-19T08:00:00Z",
           "validTo": "2026-10-19T10:00:00Z",
-          "matchConfidence": 0.99,
-          "baseCandidateRef": null,
-          "replacementDurationSeconds": null,
-          "independenceEvidenceRef": null
+          "matchConfidence": 0.99
         }
       ],
       "selected": {
@@ -631,10 +582,7 @@
         "durationSeconds": null,
         "unit": "seconds",
         "source": null,
-        "selectionReason": "closure_constraint",
-        "candidateRef": null,
-        "baseCandidateRef": null,
-        "appliedEventRefs": []
+        "selectionReason": "closure_constraint"
       },
       "passability": "closed",
       "vehicleApplicability": "covered",
@@ -650,10 +598,7 @@
   ],
   "warnings": [
     "road_closed"
-  ],
-  "evaluationCycle": "syn-cycle-4",
-  "inputRevision": "syn-input-4-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -688,10 +633,7 @@
       "baseDurationSeconds": 300,
       "expectedEntryAt": "2026-10-19T08:30:00Z"
     }
-  ],
-  "evaluationCycle": "syn-cycle-5",
-  "inputRevision": "syn-input-5-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -720,8 +662,7 @@
           "recordId": "syn-record-5",
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
-        },
-        "candidateRef": "routingBase:syn-seg-001"
+        }
       },
       "measured": {
         "kind": "measured",
@@ -740,8 +681,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "measured:syn-seg-001"
+        "horizonSeconds": null
       },
       "historical": {
         "kind": "historical",
@@ -760,8 +700,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "historical:syn-seg-001"
+        "horizonSeconds": null
       },
       "forecast": {
         "kind": "forecast",
@@ -775,8 +714,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "forecast:syn-seg-001"
+        "horizonSeconds": null
       },
       "incidents": [],
       "selected": {
@@ -790,10 +728,7 @@
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
         },
-        "selectionReason": "traffic_unavailable",
-        "candidateRef": "routing_base:syn-seg-001",
-        "baseCandidateRef": null,
-        "appliedEventRefs": []
+        "selectionReason": "traffic_unavailable"
       },
       "passability": "unknown",
       "vehicleApplicability": "unknown",
@@ -809,10 +744,7 @@
   ],
   "warnings": [
     "no_traffic_coverage"
-  ],
-  "evaluationCycle": "syn-cycle-5",
-  "inputRevision": "syn-input-5-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -847,10 +779,7 @@
       "baseDurationSeconds": 300,
       "expectedEntryAt": "2026-10-19T08:30:00Z"
     }
-  ],
-  "evaluationCycle": "syn-cycle-6",
-  "inputRevision": "syn-input-6-1",
-  "attempt": 1
+  ]
 }
 ```
 
@@ -879,8 +808,7 @@
           "recordId": "syn-record-6",
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
-        },
-        "candidateRef": "routingBase:syn-seg-001"
+        }
       },
       "measured": {
         "kind": "measured",
@@ -899,8 +827,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "measured:syn-seg-001"
+        "horizonSeconds": null
       },
       "historical": {
         "kind": "historical",
@@ -919,8 +846,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "historical:syn-seg-001"
+        "horizonSeconds": null
       },
       "forecast": {
         "kind": "forecast",
@@ -934,8 +860,7 @@
         "validFrom": null,
         "validTo": null,
         "generatedAt": null,
-        "horizonSeconds": null,
-        "candidateRef": "forecast:syn-seg-001"
+        "horizonSeconds": null
       },
       "incidents": [],
       "selected": {
@@ -949,10 +874,7 @@
           "recordVersion": "1",
           "licenseRef": "synthetic-only"
         },
-        "selectionReason": "traffic_unavailable",
-        "candidateRef": "routing_base:syn-seg-001",
-        "baseCandidateRef": null,
-        "appliedEventRefs": []
+        "selectionReason": "traffic_unavailable"
       },
       "passability": "unknown",
       "vehicleApplicability": "not_covered",
@@ -968,240 +890,6 @@
   ],
   "warnings": [
     "vehicle_profile_not_covered"
-  ],
-  "evaluationCycle": "syn-cycle-6",
-  "inputRevision": "syn-input-6-1",
-  "attempt": 1
-}
-```
-
-
-## 1A. Допълнителни синтетични JSON примери (review)
-
-### R1 — пълно replacement
-```json
-{
-  "segmentRef": "s1",
-  "measured": {
-    "candidateRef": "measured:s1",
-    "kind": "measured",
-    "durationSeconds": 420,
-    "source": {
-      "sourceId": "synthetic-live",
-      "recordId": "syn-measured-r1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    }
-  },
-  "incidents": [
-    {
-      "eventRef": "e1",
-      "eventVersion": "1",
-      "effectKind": "replacement",
-      "closure": "unknown",
-      "source": {
-        "sourceId": "synthetic-incident",
-        "recordId": "syn-event-e1",
-        "recordVersion": "1",
-        "licenseRef": "synthetic-only"
-      },
-      "baseCandidateRef": null,
-      "replacementDurationSeconds": 510,
-      "adjustmentSeconds": null,
-      "alreadyIncludedIn": [],
-      "independenceEvidenceRef": null
-    }
-  ],
-  "selected": {
-    "candidateRef": "replacement:e1:1",
-    "baseCandidateRef": null,
-    "appliedEventRefs": [
-      "e1"
-    ],
-    "kind": "replacement",
-    "status": "fresh",
-    "durationSeconds": 510,
-    "source": {
-      "sourceId": "synthetic-derived",
-      "recordId": "syn-derived-13",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    },
-    "selectionReason": "synthetic_review_case"
-  },
-  "passability": "unknown",
-  "provenance": [
-    {
-      "candidateRef": "measured:s1",
-      "sourceId": "synthetic-live",
-      "recordId": "syn-measured-r1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    },
-    {
-      "eventRef": "e1",
-      "eventVersion": "1",
-      "effectKind": "replacement",
-      "sourceId": "synthetic-incident",
-      "recordId": "syn-event-e1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    }
-  ]
-}
-```
-
-### R2 — независим adjustment
-```json
-{
-  "segmentRef": "s1",
-  "measured": {
-    "candidateRef": "measured:s1",
-    "kind": "measured",
-    "durationSeconds": 420,
-    "source": {
-      "sourceId": "synthetic-live",
-      "recordId": "syn-measured-r1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    }
-  },
-  "incidents": [
-    {
-      "eventRef": "e1",
-      "eventVersion": "1",
-      "effectKind": "adjustment",
-      "closure": "unknown",
-      "source": {
-        "sourceId": "synthetic-incident",
-        "recordId": "syn-event-e1",
-        "recordVersion": "1",
-        "licenseRef": "synthetic-only"
-      },
-      "baseCandidateRef": "measured:s1",
-      "replacementDurationSeconds": null,
-      "adjustmentSeconds": 60,
-      "alreadyIncludedIn": [],
-      "independenceEvidenceRef": "synthetic-independent-evidence"
-    }
-  ],
-  "selected": {
-    "candidateRef": "derived:measured:s1:e1",
-    "baseCandidateRef": "measured:s1",
-    "appliedEventRefs": [
-      "e1"
-    ],
-    "kind": "derived_adjustment",
-    "status": "fresh",
-    "durationSeconds": 480,
-    "source": {
-      "sourceId": "synthetic-derived",
-      "recordId": "syn-derived-14",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    },
-    "selectionReason": "synthetic_review_case"
-  },
-  "passability": "unknown",
-  "provenance": [
-    {
-      "candidateRef": "measured:s1",
-      "sourceId": "synthetic-live",
-      "recordId": "syn-measured-r1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    },
-    {
-      "eventRef": "e1",
-      "eventVersion": "1",
-      "effectKind": "adjustment",
-      "sourceId": "synthetic-incident",
-      "recordId": "syn-event-e1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    },
-    {
-      "independenceEvidenceRef": "synthetic-independent-evidence",
-      "sourceId": "synthetic-evidence",
-      "recordId": "syn-independent-e1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    }
-  ]
-}
-```
-
-### R3 — блокирано двойно броене
-```json
-{
-  "segmentRef": "s1",
-  "measured": {
-    "candidateRef": "measured:s1",
-    "kind": "measured",
-    "durationSeconds": 420,
-    "source": {
-      "sourceId": "synthetic-live",
-      "recordId": "syn-measured-r1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    }
-  },
-  "incidents": [
-    {
-      "eventRef": "e1",
-      "eventVersion": "1",
-      "effectKind": "adjustment",
-      "closure": "unknown",
-      "source": {
-        "sourceId": "synthetic-incident",
-        "recordId": "syn-event-e1",
-        "recordVersion": "1",
-        "licenseRef": "synthetic-only"
-      },
-      "baseCandidateRef": "measured:s1",
-      "replacementDurationSeconds": null,
-      "adjustmentSeconds": 120,
-      "alreadyIncludedIn": [
-        "measured:s1"
-      ],
-      "independenceEvidenceRef": null
-    }
-  ],
-  "selected": {
-    "candidateRef": "measured:s1",
-    "baseCandidateRef": null,
-    "appliedEventRefs": [],
-    "kind": "measured",
-    "status": "fresh",
-    "durationSeconds": 420,
-    "source": {
-      "sourceId": "synthetic-live",
-      "recordId": "syn-measured-r1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    },
-    "selectionReason": "possible_double_count"
-  },
-  "passability": "unknown",
-  "provenance": [
-    {
-      "candidateRef": "measured:s1",
-      "sourceId": "synthetic-live",
-      "recordId": "syn-measured-r1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    },
-    {
-      "eventRef": "e1",
-      "eventVersion": "1",
-      "effectKind": "adjustment",
-      "status": "blocked",
-      "reason": "possible_double_count",
-      "sourceId": "synthetic-incident",
-      "recordId": "syn-event-e1",
-      "recordVersion": "1",
-      "licenseRef": "synthetic-only"
-    }
   ]
 }
 ```
@@ -1230,24 +918,10 @@
 | A18 | Truck height/weight constraint не е покрит от source | `vehicleApplicability=not_covered`, warning; не се твърди truck-safe route |
 | A19 | Няма live feed, но има приложима historical оценка 410 s | `measured=unavailable`, `selected.kind=historical`, ясно означен fallback |
 | A20 | Forecast endpoint връща число, но няма валидиран модел | `forecast=unavailable`, числото не се използва |
-| A21 | 3 опита в един evaluationCycle дават 400→470→410 s без стабилизиране | Stop след третата; warning `unstable_estimate`; не се твърди конвергенция |
+| A21 | 3 итерации дават 400→470→410 s без стабилизиране | Stop след третата; warning `unstable_estimate`; не се твърди конвергенция |
 | A22 | Измерване `observedAt` старо, но `receivedAt` току-що | `stale`, не `fresh` само заради нов receive timestamp |
 | A23 | Сегмент без `baseDurationSeconds` и без приложими traffic данни | `selected.durationSeconds=null`, status `unavailable/unknown`, никога 0 |
 | A24 | Event в reverse carriageway на тунел със същия road name | Не се прилага на forward; road name сам не е достатъчен |
-
-| A25 | Replacement 510 s и measured 420 s | Избира 510 s като пълно време, не сбор |
-| A26 | Независим adjustment +60 s върху measured 420 s, с доказателство | Избира 480 s; baseCandidateRef и provenance са явни |
-| A27 | Adjustment +120 s вече е в measured 420 s или няма evidence | Избира 420 s; warning possible_double_count |
-| A28 | Нова departure/почивки при същата routeRevision | Нов evaluationCycle с нов лимит 3 опита |
-| A29 | Закъснял отговор със стар inputRevision/attempt/requestId | Отхвърля се, дори routeRevision да съвпада |
-| A30 | incidents=[] и measured 320 s без open evidence | passability=unknown |
-| A31 | historical 410 s без потвърждение за проходимост | passability=unknown |
-| A32 | open evidence е expired за expectedEntryAt | Не се приема open |
-
-| A33 | closure=closed и effectKind=constraint | Невалиден enum; допустимо е effectKind=none без числов ефект |
-| A34 | replacement е приложен, но incident липсва от provenance | Невалиден lineage; изисква се eventRef/source |
-| A35 | adjustment е приложен, но evidence ref липсва от provenance | Невалиден lineage; изисква се evidence record |
-| A36 | adjustment е блокиран без доказателство | Не се добавя измислено evidence; appliedEventRefs=[] |
 
 ## 3. Отворени проверки
 
