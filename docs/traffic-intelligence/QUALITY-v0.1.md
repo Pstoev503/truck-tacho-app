@@ -69,3 +69,5 @@
 - `open` изисква положително, времево и профилно приложимо доказателство; празен incidents[] не е доказателство.
 - `candidateRef` и `baseCandidateRef` трябва да се свързват точно; replacement е пълна duration; adjustment без `independenceEvidenceRef` или вече включен ефект се блокира.
 - Максимум три опита за `evaluationCycle`; стар inputRevision/requestId/attempt не презаписва текущото състояние.
+
+- Closure с `closure=closed` използва `effectKind=none`; проходимостта е constraint, не четвърти вид числов ефект. При приложен replacement/adjustment `provenance[]` включва candidate, incident и (при adjustment) действително посочен evidence ref. Блокиран ефект не се представя като приложен.

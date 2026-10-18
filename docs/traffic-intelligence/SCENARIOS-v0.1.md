@@ -607,7 +607,7 @@
           "eventRef": "syn-closure-1",
           "eventVersion": "2",
           "lifecycle": "active",
-          "effectKind": "constraint",
+          "effectKind": "none",
           "closure": "closed",
           "adjustmentSeconds": null,
           "alreadyIncludedIn": [],
@@ -987,7 +987,10 @@
     "kind": "measured",
     "durationSeconds": 420,
     "source": {
-      "sourceId": "synthetic-live"
+      "sourceId": "synthetic-live",
+      "recordId": "syn-measured-r1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     }
   },
   "incidents": [
@@ -997,7 +1000,10 @@
       "effectKind": "replacement",
       "closure": "unknown",
       "source": {
-        "sourceId": "synthetic-incident"
+        "sourceId": "synthetic-incident",
+        "recordId": "syn-event-e1",
+        "recordVersion": "1",
+        "licenseRef": "synthetic-only"
       },
       "baseCandidateRef": null,
       "replacementDurationSeconds": 510,
@@ -1016,7 +1022,10 @@
     "status": "fresh",
     "durationSeconds": 510,
     "source": {
-      "sourceId": "synthetic-incident"
+      "sourceId": "synthetic-derived",
+      "recordId": "syn-derived-13",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     },
     "selectionReason": "synthetic_review_case"
   },
@@ -1024,7 +1033,19 @@
   "provenance": [
     {
       "candidateRef": "measured:s1",
-      "sourceId": "synthetic-live"
+      "sourceId": "synthetic-live",
+      "recordId": "syn-measured-r1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
+    },
+    {
+      "eventRef": "e1",
+      "eventVersion": "1",
+      "effectKind": "replacement",
+      "sourceId": "synthetic-incident",
+      "recordId": "syn-event-e1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     }
   ]
 }
@@ -1039,7 +1060,10 @@
     "kind": "measured",
     "durationSeconds": 420,
     "source": {
-      "sourceId": "synthetic-live"
+      "sourceId": "synthetic-live",
+      "recordId": "syn-measured-r1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     }
   },
   "incidents": [
@@ -1049,7 +1073,10 @@
       "effectKind": "adjustment",
       "closure": "unknown",
       "source": {
-        "sourceId": "synthetic-incident"
+        "sourceId": "synthetic-incident",
+        "recordId": "syn-event-e1",
+        "recordVersion": "1",
+        "licenseRef": "synthetic-only"
       },
       "baseCandidateRef": "measured:s1",
       "replacementDurationSeconds": null,
@@ -1068,7 +1095,10 @@
     "status": "fresh",
     "durationSeconds": 480,
     "source": {
-      "sourceId": "synthetic-derived"
+      "sourceId": "synthetic-derived",
+      "recordId": "syn-derived-14",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     },
     "selectionReason": "synthetic_review_case"
   },
@@ -1076,7 +1106,26 @@
   "provenance": [
     {
       "candidateRef": "measured:s1",
-      "sourceId": "synthetic-live"
+      "sourceId": "synthetic-live",
+      "recordId": "syn-measured-r1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
+    },
+    {
+      "eventRef": "e1",
+      "eventVersion": "1",
+      "effectKind": "adjustment",
+      "sourceId": "synthetic-incident",
+      "recordId": "syn-event-e1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
+    },
+    {
+      "independenceEvidenceRef": "synthetic-independent-evidence",
+      "sourceId": "synthetic-evidence",
+      "recordId": "syn-independent-e1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     }
   ]
 }
@@ -1091,7 +1140,10 @@
     "kind": "measured",
     "durationSeconds": 420,
     "source": {
-      "sourceId": "synthetic-live"
+      "sourceId": "synthetic-live",
+      "recordId": "syn-measured-r1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     }
   },
   "incidents": [
@@ -1101,7 +1153,10 @@
       "effectKind": "adjustment",
       "closure": "unknown",
       "source": {
-        "sourceId": "synthetic-incident"
+        "sourceId": "synthetic-incident",
+        "recordId": "syn-event-e1",
+        "recordVersion": "1",
+        "licenseRef": "synthetic-only"
       },
       "baseCandidateRef": "measured:s1",
       "replacementDurationSeconds": null,
@@ -1120,7 +1175,10 @@
     "status": "fresh",
     "durationSeconds": 420,
     "source": {
-      "sourceId": "synthetic-live"
+      "sourceId": "synthetic-live",
+      "recordId": "syn-measured-r1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     },
     "selectionReason": "possible_double_count"
   },
@@ -1128,7 +1186,21 @@
   "provenance": [
     {
       "candidateRef": "measured:s1",
-      "sourceId": "synthetic-live"
+      "sourceId": "synthetic-live",
+      "recordId": "syn-measured-r1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
+    },
+    {
+      "eventRef": "e1",
+      "eventVersion": "1",
+      "effectKind": "adjustment",
+      "status": "blocked",
+      "reason": "possible_double_count",
+      "sourceId": "synthetic-incident",
+      "recordId": "syn-event-e1",
+      "recordVersion": "1",
+      "licenseRef": "synthetic-only"
     }
   ]
 }
@@ -1171,6 +1243,11 @@
 | A30 | incidents=[] и measured 320 s без open evidence | passability=unknown |
 | A31 | historical 410 s без потвърждение за проходимост | passability=unknown |
 | A32 | open evidence е expired за expectedEntryAt | Не се приема open |
+
+| A33 | closure=closed и effectKind=constraint | Невалиден enum; допустимо е effectKind=none без числов ефект |
+| A34 | replacement е приложен, но incident липсва от provenance | Невалиден lineage; изисква се eventRef/source |
+| A35 | adjustment е приложен, но evidence ref липсва от provenance | Невалиден lineage; изисква се evidence record |
+| A36 | adjustment е блокиран без доказателство | Не се добавя измислено evidence; appliedEventRefs=[] |
 
 ## 3. Отворени проверки
 
