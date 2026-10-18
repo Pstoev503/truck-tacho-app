@@ -84,6 +84,52 @@ test('reports a point outside the corridor as off-route', () => {
   assert.ok(result.routeOffsetM !== null);
 });
 
+test('a candidate outside the corridor does not make an eligible match ambiguous', () => {
+  const index = indexRoute([
+    { lat: 0, lon: 0 }, { lat: 0, lon: 1 },
+    { lat: 0.00003, lon: 1 }, { lat: 0.00003, lon: 0 }
+  ]);
+  const result = projectToRoute(index, { lat: 0, lon: 0.5 }, { maxDistanceM: 1 });
+
+  assert.equal(result.status, 'matched');
+  assert.equal(result.segmentIndex, 0);
+  assert.equal(result.candidates.length, 1);
+  closeTo(result.lateralDistanceM, 0, 0.01);
+});
+
+test('two distinct candidates inside the corridor and ambiguity tolerance are ambiguous', () => {
+  const index = indexRoute([
+    { lat: 0, lon: 0 }, { lat: 0, lon: 1 },
+    { lat: 0.00003, lon: 1 }, { lat: 0.00003, lon: 0 }
+  ]);
+  const result = projectToRoute(index, { lat: 0, lon: 0.5 }, {
+    maxDistanceM: 5,
+    ambiguityToleranceM: 5
+  });
+
+  assert.equal(result.status, 'ambiguous');
+  assert.equal(result.routeOffsetM, null);
+  assert.equal(result.candidates.length, 2);
+  assert.ok(result.candidates.every(candidate => candidate.lateralDistanceM <= 5));
+});
+
+test('candidates all outside the corridor remain off-route diagnostics', () => {
+  const index = indexRoute([
+    { lat: 0, lon: 0 }, { lat: 0, lon: 1 },
+    { lat: 0.00003, lon: 1 }, { lat: 0.00003, lon: 0 }
+  ]);
+  const result = projectToRoute(index, { lat: 0.0001, lon: 0.5 }, {
+    maxDistanceM: 1
+  });
+
+  assert.equal(result.status, 'off-route');
+  assert.equal(result.reason, 'outside-corridor');
+  assert.ok(result.candidates.length >= 2);
+  assert.ok(result.candidates.every(candidate => candidate.lateralDistanceM > 1));
+  assert.ok(result.lateralDistanceM > 1);
+  assert.ok(result.routeOffsetM !== null);
+});
+
 test('a shared vertex on adjacent segments is one matched position', () => {
   const index = indexRoute([
     { lat: 0, lon: 0 }, { lat: 0, lon: 1 }, { lat: 1, lon: 1 }

@@ -271,6 +271,9 @@ export function projectToRoute(index, point, {
     if (!duplicate) uniqueCandidates.push(candidate);
   }
 
+  const corridorCandidates = uniqueCandidates.filter(candidate =>
+    candidate.lateralDistanceM <= maxDistanceM
+  );
   const best = uniqueCandidates[0];
   const routeRevision = index.routeRevision;
   const result = {
@@ -291,12 +294,13 @@ export function projectToRoute(index, point, {
   result.routeOffsetM = best.routeOffsetM;
   result.segmentIndex = best.segmentIndex;
   result.lateralDistanceM = best.lateralDistanceM;
-  if (best.lateralDistanceM > maxDistanceM) return result;
+  if (corridorCandidates.length === 0) return result;
 
-  const tied = uniqueCandidates.filter(candidate =>
-    candidate.lateralDistanceM - best.lateralDistanceM <= ambiguityToleranceM &&
-    (candidate === best ||
-      Math.abs(candidate.routeOffsetM - best.routeOffsetM) > AMBIGUITY_MIN_OFFSET_SEPARATION_M)
+  const bestMatch = corridorCandidates[0];
+  const tied = corridorCandidates.filter(candidate =>
+    candidate.lateralDistanceM - bestMatch.lateralDistanceM <= ambiguityToleranceM &&
+    (candidate === bestMatch ||
+      Math.abs(candidate.routeOffsetM - bestMatch.routeOffsetM) > AMBIGUITY_MIN_OFFSET_SEPARATION_M)
   );
   if (tied.length > 1) {
     result.status = 'ambiguous';
@@ -310,10 +314,10 @@ export function projectToRoute(index, point, {
   }
 
   return {
-    ...best,
+    ...bestMatch,
     routeRevision,
     status: 'matched',
     reason: null,
-    candidates: uniqueCandidates
+    candidates: corridorCandidates
   };
 }
