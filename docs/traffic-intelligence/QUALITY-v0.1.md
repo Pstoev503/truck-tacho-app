@@ -64,3 +64,8 @@
 Тази таблица е интерфейсен checklist за Copilot/отговорника, **не** повторна инвентаризация на DATEX доставчици.
 
 **Първични ориентири (към 2026-10-17, без live проверка):** [DATEX II](https://datex2.eu/); [ЕК — National Access Points](https://transport.ec.europa.eu/transport-themes/smart-mobility/road/its-directive-and-action-plan/national-access-points_en); [Регламент (ЕС) 2022/670](https://eur-lex.europa.eu/eli/reg_del/2022/670/oj). Лицензи и схеми на конкретни доставчици **не са проверени**.
+## Review amendment (2026-10-18)
+
+- `open` изисква положително, времево и профилно приложимо доказателство; празен incidents[] не е доказателство.
+- `candidateRef` и `baseCandidateRef` трябва да се свързват точно; replacement е пълна duration; adjustment без `independenceEvidenceRef` или вече включен ефект се блокира.
+- Максимум три опита за `evaluationCycle`; стар inputRevision/requestId/attempt не презаписва текущото състояние.
