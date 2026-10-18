@@ -36,7 +36,8 @@ export function validateTrafficExchange(request, response, {activeRequest} = {})
     refs.add(a.segmentRef);
     if(a.sequence!==i)fail('ORDER',p+'.sequence');
     utc(a.expectedEntryAt,p+'.expectedEntryAt');secs(a.baseDurationSeconds,p+'.baseDurationSeconds');
-    if(!object(a.geometry)||a.geometry.type!=='LineString'||!Array.isArray(a.geometry.coordinates)||a.geometry.coordinates.length<2)fail('GEOMETRY',p+'.geometry');
+    if(a.geometry!==null&&(!object(a.geometry)||a.geometry.type!=='LineString'||!Array.isArray(a.geometry.coordinates)||a.geometry.coordinates.length<2))fail('GEOMETRY',p+'.geometry');
+    en(a.direction,['forward','backward','both','unknown'],p+'.direction');
     if(!object(b)){fail('SEGMENT',t);return;}
     if(b.segmentRef!==a.segmentRef||b.sequence!==i)fail('SEGMENT_ECHO',t);
     if(b.expectedEntryAt!==a.expectedEntryAt)fail('ENTRY_ECHO',t+'.expectedEntryAt');
@@ -54,6 +55,8 @@ export function validateTrafficExchange(request, response, {activeRequest} = {})
       secs(x.durationSeconds,cp+'.durationSeconds');
       if(x.unit!==undefined&&x.unit!=='seconds')fail('UNIT',cp+'.unit');
       if(x.durationSeconds!==null)source(x.source,cp+'.source');
+      if(x.kind!==undefined)en(x.kind,['routing_base','measured','historical','forecast'],cp+'.kind');
+      if(k==='measured'&&x.kind==='count')fail('COUNT_ONLY',cp+'.kind');
       if(x.status!==undefined)en(x.status,statuses,cp+'.status');
       for(const k2 of ['observedAt','publishedAt','receivedAt','validFrom','validTo','generatedAt'])if(x[k2]!=null)utc(x[k2],cp+'.'+k2);
       if(x.validFrom&&x.validTo&&Date.parse(x.validFrom)>=Date.parse(x.validTo))fail('RANGE',cp);
@@ -74,6 +77,7 @@ export function validateTrafficExchange(request, response, {activeRequest} = {})
       if(e.validFrom)utc(e.validFrom,ep+'.validFrom');
       if(e.validTo)utc(e.validTo,ep+'.validTo');
       if(e.validFrom&&e.validTo&&Date.parse(e.validFrom)>=Date.parse(e.validTo))fail('RANGE',ep);
+      if(e.alreadyIncludedIn!==undefined&&!Array.isArray(e.alreadyIncludedIn))fail('INCLUDED_ARRAY',ep+'.alreadyIncludedIn');
       if(e.closure==='closed'&&(e.effectKind!=='none'||e.adjustmentSeconds!==null||e.replacementDurationSeconds!==null))fail('CLOSURE_EFFECT',ep);
       if(e.effectKind==='none'&&(e.adjustmentSeconds!==null||e.replacementDurationSeconds!==null))fail('NONE_EFFECT',ep);
       if(e.effectKind==='replacement'){
@@ -98,7 +102,15 @@ export function validateTrafficExchange(request, response, {activeRequest} = {})
     provenance.forEach((v,j)=>source(v,t+'.provenance['+j+']'));
     if(b.passability==='open'&&!provenance.some(v=>v?.kind==='passability_open'&&v.direction===a.direction&&v.vehicleProfileRef===request.vehicleProfileRef&&Date.parse(v.validFrom)<=Date.parse(a.expectedEntryAt)&&Date.parse(a.expectedEntryAt)<Date.parse(v.validTo)))fail('OPEN_UNPROVEN',t+'.passability');
     if(b.passability==='closed'&&(x.durationSeconds!==null||!incidents.some(e=>e?.closure==='closed'&&e.effectKind==='none')))fail('CLOSED_ETA',sp);
-    if(x.candidateRef!==null&&!candidates.has(x.candidateRef)&&!String(x.candidateRef).startsWith('replacement:')&&!String(x.candidateRef).startsWith('derived:'))fail('SELECTED_REF',sp+'.candidateRef');
+    if(x.candidateRef!==null&&!candidates.has(x.candidateRef)&&!applied.some(ref=>{const e=ev.get(ref);return e?.effectKind==='replacement'&&x.candidateRef==='replacement:'+e.eventRef+':'+e.eventVersion||e?.effectKind==='adjustment'&&x.candidateRef==='derived:'+e.baseCandidateRef+':'+e.eventRef;}))fail('SELECTED_REF',sp+'.candidateRef');
+    if(x.durationSeconds!==null&&x.candidateRef===null)fail('SELECTED_REF',sp+'.candidateRef');
+    if(candidates.has(x.candidateRef)){
+      const chosen=candidates.get(x.candidateRef),kind=x.kind;
+      if(chosen.kind!==undefined&&chosen.kind!==kind)fail('SELECTED_KIND',sp+'.kind');
+      if(chosen.status==='stale'&&x.status==='fresh')fail('STALE_SELECTED_FRESH',sp+'.status');
+      if(chosen.validFrom&&Date.parse(a.expectedEntryAt)<Date.parse(chosen.validFrom)||chosen.validTo&&Date.parse(a.expectedEntryAt)>=Date.parse(chosen.validTo))fail('SELECTED_OUTSIDE_WINDOW',sp+'.candidateRef');
+    }
+    if(x.kind==='measured'&&b.measured?.status==='stale'&&x.status==='fresh')fail('STALE_SELECTED_FRESH',sp+'.status');
     if(x.baseCandidateRef!==null&&!candidates.has(x.baseCandidateRef))fail('BASE_REF',sp+'.baseCandidateRef');
     applied.forEach((ref,j)=>{
       const ep=sp+'.appliedEventRefs['+j+']',e=ev.get(ref);
@@ -109,7 +121,7 @@ export function validateTrafficExchange(request, response, {activeRequest} = {})
       if(e.effectKind==='adjustment'){
         if(x.baseCandidateRef!==e.baseCandidateRef)fail('ADJUSTMENT_BASE',ep);
         if(!id(e.independenceEvidenceRef)||!provenance.some(v=>v?.independenceEvidenceRef===e.independenceEvidenceRef))fail('EVIDENCE',ep);
-        if(e.alreadyIncludedIn?.includes(e.baseCandidateRef))fail('DOUBLE_COUNT',ep);
+        if(Array.isArray(e.alreadyIncludedIn)&&e.alreadyIncludedIn.includes(e.baseCandidateRef))fail('DOUBLE_COUNT',ep);
         const base=candidates.get(e.baseCandidateRef);
         if(base&&Number.isSafeInteger(base.durationSeconds)&&Number.isSafeInteger(e.adjustmentSeconds)&&x.durationSeconds!==base.durationSeconds+e.adjustmentSeconds)fail('ADJUSTMENT_SUM',ep);
       }

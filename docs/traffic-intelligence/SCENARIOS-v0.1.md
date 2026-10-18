@@ -791,7 +791,7 @@
           "licenseRef": "synthetic-only"
         },
         "selectionReason": "traffic_unavailable",
-        "candidateRef": "routing_base:syn-seg-001",
+        "candidateRef": "routingBase:syn-seg-001",
         "baseCandidateRef": null,
         "appliedEventRefs": []
       },
@@ -950,7 +950,7 @@
           "licenseRef": "synthetic-only"
         },
         "selectionReason": "traffic_unavailable",
-        "candidateRef": "routing_base:syn-seg-001",
+        "candidateRef": "routingBase:syn-seg-001",
         "baseCandidateRef": null,
         "appliedEventRefs": []
       },
