@@ -42,6 +42,24 @@ function toTime(value) {
   return typeof value === 'number' ? value : value instanceof Date ? value.getTime() : Date.parse(value);
 }
 
+// Coverage is evidence of recorded intervals, not proof that the activities are
+// correct. Never let a future-dated record fill an unobserved interval.
+function checkHistoryCoverage(activities, from, to, observedUntil) {
+  const intervals = activities.map(activity => ({
+    start: Math.max(from, toTime(activity.start)),
+    end: Math.min(to, observedUntil, toTime(activity.end))
+  })).filter(interval => Number.isFinite(interval.start) && Number.isFinite(interval.end) &&
+    interval.end > interval.start).sort((a, b) => a.start - b.start);
+  const gaps = [];
+  let cursor = from;
+  for (const interval of intervals) {
+    if (interval.start > cursor) gaps.push({ start: cursor, end: interval.start });
+    cursor = Math.max(cursor, interval.end);
+  }
+  if (cursor < to) gaps.push({ start: cursor, end: to });
+  return { from, to, observedUntil, complete: gaps.length === 0, gaps };
+}
+
 function validateStages(stages) {
   if (!Array.isArray(stages) || stages.length === 0) throw new Error('Добави поне един пътен етап.');
   return stages.map((stage, index) => {
@@ -217,9 +235,8 @@ export function buildPlan({
   }
 
   const analysis = analysisAt(time);
-  const earliest = baseActivities.reduce((value, activity) => Math.min(value, toTime(activity.start)), Infinity);
-  const logCoversFortnight = Number.isFinite(earliest) && earliest <= weekStart(start) - WEEK_MS;
-  const historyComplete = logCoversFortnight && !analysis.status.daily.startAssumed && !analysis.status.weeklyRest.estimated;
+  const historyCoverage = checkHistoryCoverage(baseActivities, weekStart(start) - WEEK_MS, start, currentTime);
+  const historyComplete = historyCoverage.complete && !analysis.status.daily.startAssumed && !analysis.status.weeklyRest.estimated;
   const departureGapAssumed = start > currentTime;
   const confirmed = analysis.violations.length === 0 && historyComplete && !departureGapAssumed;
 
@@ -236,12 +253,14 @@ export function buildPlan({
     extendedDuties: analysis.duties.filter(duty => duty.extended).map(duty => duty.start),
     ignoredExtensions,
     ignoredDailyRests,
+    historyCoverage,
     confirmed,
     confidence: confirmed ? 'потвърдено от наличните данни' : 'непотвърдено — липсват данни или има допускания',
     assumptions: [
       'Ориентировъчни постоянни скорости: 80 км/ч по магистрала и 55 км/ч по обикновен път.',
       'Не са включени трафик, граници, товарене, ограничения за камиони или наличност на паркинги.',
       ...(departureGapAssumed ? ['Дейността до бъдещия час на потегляне е неизвестна; не се зачита автоматично като почивка.'] : []),
+      ...(historyCoverage.gaps.length ? [`Има ${historyCoverage.gaps.length} непокрити интервала в необходимата начална история.`] : []),
       ...(!historyComplete ? ['Историята не покрива надеждно две седмици, дневните удължения или последната седмична почивка.'] : [])
     ]
   };
