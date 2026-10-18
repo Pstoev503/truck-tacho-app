@@ -38,6 +38,16 @@ test('add, drag, remove-last and clear update ordered geometry and route revisio
   assert.equal(controller.getState().points.length, 0);
 });
 
+test('removing the final edge also removes its old section choices', () => {
+  const controller = makeController();
+  controller.addPoint({ lat: 0, lon: 0 });
+  controller.addPoint({ lat: 0, lon: 0.01 });
+  controller.addPoint({ lat: 0, lon: 0.02 });
+  controller.setChoice('section-2', { useExtension: true, dailyRest: 'reduced' });
+  controller.removeLastPoint();
+  assert.deepEqual(controller.getState().choices, {});
+});
+
 test('invalid coordinate ranges are rejected', () => {
   const controller = makeController();
   assert.throws(() => controller.addPoint({ lat: 85, lon: 0 }), /поддържаните координати/);

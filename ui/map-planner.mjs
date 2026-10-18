@@ -122,6 +122,7 @@ export function createMapPlannerController({
     },
     removeLastPoint() {
       if (!points.length) return false;
+      if (points.length > 1) delete choices[`section-${points.length - 1}`];
       points.pop();
       roadTypes.pop();
       invalidate(true);
