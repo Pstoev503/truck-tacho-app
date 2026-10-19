@@ -30,7 +30,18 @@
     </section>
 
     <section class="card">
-      <h2>2. Потегляне</h2>
+      <h2>2. Начален дневник</h2>
+      <p>По желание използвай дневника само от този браузър. Самоличността и достоверността му не са независимо потвърдени.</p>
+      <div class="controls">
+        <button id="history-use" type="button">Използвай дневника от това устройство</button>
+        <button id="history-refresh" class="secondary" type="button" hidden>Опресни дневника</button>
+        <button id="history-none" class="secondary" type="button">Продължи без начална история</button>
+      </div>
+      <p id="history-status" class="history-status" aria-live="polite">Без начална история. Избери дневника от устройството или продължи без него.</p>
+    </section>
+
+    <section class="card">
+      <h2>3. Потегляне</h2>
       <label for="departure-mode">Час на потегляне</label>
       <select id="departure-mode">
         <option value="now">Сега</option>
