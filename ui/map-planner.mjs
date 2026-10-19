@@ -6,6 +6,7 @@ import { loadPlannerInitialState } from './planner-initial-state.mjs';
 import { createDraft, draftFileName, parseDraftText, readDraftFile } from './planner-draft.mjs';
 import { DEFAULT_LOOKBACK_KM, restParkingWindow, validateLookbackKm } from './rest-parking-window.mjs';
 import { routeWindowPoints } from './route-window-geometry.mjs';
+import { describeSelection, scheduleSelection } from './schedule-map-selection.mjs';
 import {
   DEPARTURE_TIME_ZONE, DepartureError, FOLDS, absoluteDepartureUtcMs, formatUtcOffset, resolveSofiaDeparture
 } from './planner-departure.mjs';
@@ -38,6 +39,8 @@ export function createMapPlannerController({
   let error = null;
   let departure = { mode: 'now', hours: 0, minutes: 0 };
   let breakStyle = '45';
+  // A visual check of one schedule stage; it never changes the plan or inputs.
+  let stage = { selection: null, error: null };
   // Draft file loads: a newer load, clear or route edit makes an older read stale.
   const draft = { mode: 'idle', fileName: null, error: null, token: 0 };
   let history = { mode: 'unselected', snapshot: null, summary: null, error: null };
@@ -60,6 +63,11 @@ export function createMapPlannerController({
     inputRevision,
     departure: { ...departure },
     departureStatus: departureStatus(),
+    // Only a selection made from the plan object shown now is reported.
+    stage: {
+      selection: stage.selection && stage.selection.result === result ? stage.selection : null,
+      error: stage.error
+    },
     breakStyle,
     draft: { mode: draft.mode, fileName: draft.fileName, error: draft.error },
     history: clone(history),
@@ -117,7 +125,9 @@ export function createMapPlannerController({
     dropParkingResult();
     if (parking.mode === 'evaluated') parking.mode = 'loaded';
   };
+  const dropStage = () => { stage = { selection: null, error: null }; };
   const invalidate = routeChanged => {
+    dropStage();
     if (routeChanged) {
       routeRevision++;
       if (draft.mode === 'loading') {
@@ -411,9 +421,25 @@ export function createMapPlannerController({
       return parking.windowError === null;
     },
     evaluateParking: evaluateParkingList,
+    // Shows one stage of the current plan on the line; no planning or evaluation.
+    selectScheduleStage(eventIndex) {
+      try {
+        stage = { selection: scheduleSelection({ points: clone(points), result, eventIndex }), error: null };
+      } catch (caught) {
+        stage = { selection: null, error: caught instanceof Error ? caught.message : 'Етапът не може да се покаже.' };
+      }
+      notify();
+      return stage.selection ? { selected: true } : { selected: false, error: stage.error };
+    },
+    clearScheduleStage() {
+      if (!stage.selection && !stage.error) return;
+      dropStage();
+      notify();
+    },
     // Sets the parking window to the stretch before one pause of the shown plan.
     // The plan, its pauses and ETA stay as they are; nothing is evaluated here.
     selectRestForParking(eventIndex, lookbackKm = parking.lookbackKm) {
+      dropStage();
       dropParkingResult();
       if (parking.mode === 'evaluated') parking.mode = 'loaded';
       try {
@@ -600,6 +626,7 @@ export function createMapPlannerController({
       const { requestId, routeRevision: requestedRouteRevision, inputRevision: requestedInputRevision } = request;
       // A new plan replaces the pauses; a window chosen from the old one goes too.
       dropRestWindow();
+      dropStage();
       activeRequestId = requestId;
       result = null;
       error = null;
@@ -726,6 +753,18 @@ export function parkingWindowOverlay(state) {
   });
 }
 
+// What the map shows for a chosen schedule stage, or null.
+export function scheduleStageOverlay(state) {
+  const selection = state?.stage?.selection;
+  if (!selection) return null;
+  return Object.freeze({
+    kind: selection.kind,
+    line: selection.line ?? null,
+    point: selection.point ?? null,
+    lines: Object.freeze(describeSelection(selection))
+  });
+}
+
 // The whole route is fitted once per new plan result, not on every render, so
 // parking actions do not move the map; zooming to a window is explicit.
 let lastFittedResult = null;
@@ -829,7 +868,17 @@ function renderPlanner(state, map, layers, controller) {
         map.fitBounds(L.latLngBounds(state.points.map(point => [point.lat, point.lon])).pad(0.12));
       }
     }
-    const overlay = parkingWindowOverlay(state);
+    const stageOverlay = scheduleStageOverlay(state);
+    // A chosen schedule stage takes the highlight; otherwise the parking window does.
+    const overlay = stageOverlay ? null : parkingWindowOverlay(state);
+    if (stageOverlay?.line) {
+      layers.addLayer(L.polyline(stageOverlay.line, { color: '#c792ea', weight: 10, opacity: 0.85 }));
+    }
+    if (stageOverlay?.point) {
+      layers.addLayer(L.circleMarker([stageOverlay.point.lat, stageOverlay.point.lon], {
+        radius: 11, weight: 4, color: '#c792ea', fillColor: '#111', fillOpacity: 1
+      }));
+    }
     if (overlay) {
       layers.addLayer(L.polyline(overlay.line, { color: '#ffd166', weight: 10, opacity: 0.85 }));
       const restMarker = L.circleMarker([overlay.rest.lat, overlay.rest.lon], {
@@ -853,9 +902,13 @@ function renderPlanner(state, map, layers, controller) {
   }
   renderParking(state.parking);
   const windowOverlay = parkingWindowOverlay(state);
-  $('map-window-caption').textContent = windowOverlay ? windowOverlay.caption : '';
-  $('map-window-caption').hidden = !windowOverlay;
+  const stageView = scheduleStageOverlay(state);
+  $('map-window-caption').textContent = stageView ? stageView.lines.join(' ') : windowOverlay ? windowOverlay.caption : '';
+  $('map-window-caption').hidden = !stageView && !windowOverlay;
   $('parking-window-show').disabled = !windowOverlay;
+  $('stage-detail').replaceChildren(...(stageView ? stageView.lines : state.stage.error ? [state.stage.error] : [])
+    .map(line => element('p', line)));
+  $('stage-clear').disabled = !stageView;
 
   $('departure-mode').value = state.departure.mode;
   $('relative-inputs').hidden = state.departure.mode !== 'relative';
@@ -895,6 +948,9 @@ function renderPlanner(state, map, layers, controller) {
   $('plan').disabled = state.points.length < 2 || !['loaded', 'none'].includes(state.history.mode);
   renderSchedule(state.result, controller);
 }
+
+// Set by the page code below; moves the map only on an explicit request.
+let focusStage = () => {};
 
 function renderAbsoluteDeparture(departure, status) {
   const $ = id => document.getElementById(id);
@@ -997,6 +1053,14 @@ function renderSchedule(result, controller) {
     const driving = event.type === 'drive';
     const title = driving ? 'Каране' : (source?.label || 'Пауза / дневна почивка');
     const item = element('li', `${title}: ${formatSofiaTime(event.startUtcMs)} – ${formatSofiaTime(event.endUtcMs)}${driving ? ` · ${(event.toM - event.fromM) / 1000 < 0.01 ? '' : ((event.toM - event.fromM) / 1000).toFixed(1) + ' км'}` : ' · Ориентировъчно място за почивка — паркинг не е избран'}`, driving ? 'drive' : 'rest');
+    const show = element('button', 'Покажи етапа на картата', 'secondary');
+    show.type = 'button';
+    show.setAttribute('aria-label', `Покажи на картата: ${title}, ${formatSofiaTime(event.startUtcMs)} – ${formatSofiaTime(event.endUtcMs)}, етап ${index + 1}`);
+    show.addEventListener('click', () => {
+      const outcome = controller.selectScheduleStage(index);
+      if (outcome.selected) focusStage(controller.getState());
+    });
+    item.append(' ', show);
     if (event.type === 'rest') {
       const review = element('button', 'Прегледай паркинги преди тази пауза', 'secondary');
       review.type = 'button';
@@ -1114,7 +1178,19 @@ if (typeof document !== 'undefined') {
     if (file) controller.loadParkingFile(file);
   });
   document.getElementById('parking-evaluate').addEventListener('click', () => controller.evaluateParking());
+  focusStage = state => {
+    const view = scheduleStageOverlay(state);
+    if (!view) return;
+    const container = map.getContainer();
+    container.scrollIntoView({ block: 'center' });
+    if (view.line) map.fitBounds(L.latLngBounds(view.line).pad(0.25));
+    else map.setView([view.point.lat, view.point.lon], Math.max(map.getZoom(), 11));
+    container.focus();
+  };
+  document.getElementById('stage-clear').addEventListener('click', () => controller.clearScheduleStage());
   document.getElementById('parking-window-show').addEventListener('click', () => {
+    // The parking window takes the highlight back from a chosen stage.
+    controller.clearScheduleStage();
     // Uses the current state only; a dropped window draws and zooms to nothing.
     const overlay = parkingWindowOverlay(controller.getState());
     if (!overlay) return;
