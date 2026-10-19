@@ -35,6 +35,8 @@ DATABASE_URL=postgresql+psycopg://taho:taho@127.0.0.1:5432/taho WEB_ROOT=.. uvic
 
 Маршрутизирането е изключено по подразбиране. За `/api/route-options` задай `VALHALLA_URL` извън Git като абсолютен `http://` или `https://` адрес с хост и валиден порт, без credentials, query или fragment; може да включва base path, към който сървърът добавя `/route`. В production използвай HTTPS. Изричен локален HTTP адрес е само за self-hosted тестова среда. При липсващ или невалиден адрес endpoint-ът връща 503, без да изпраща заявка към външна услуга.
 
+`POST /api/route-options` изисква `origin`, `destination` и `truckProfile`. Профилът задължително съдържа `heightM`, `widthM`, `lengthM`, `grossWeightT`, `axleLoadT`, `axleCount` и `hazmat`, според [truck profile contract v1](../docs/contracts/truck-profile-v1.md). Липсващ или невалиден профил връща 422 преди outbound заявка и не изразходва route budget. Валидният профил се преобразува чрез същия mapper от contract-а в `costing_options.truck`.
+
 Всеки собственик получава общо за всички свои токени 10 outbound опита за 60 секунди, отделно във всяка фирма. Валиден опит се брои независимо дали маршрутизаторът успее; при изчерпан бюджет endpoint-ът връща 429. Лимитът е само в паметта на процеса: рестартът го занулява, а отделните worker-и нямат общ брояч.
 
 Тестове: `pip install -r requirements-dev.txt`, после `TEST_DATABASE_URL=postgresql+psycopg://taho:taho@127.0.0.1:5432/taho_test pytest -q`. В GitHub се пускат сами при всяко качване (`.github/workflows/tests.yml`).

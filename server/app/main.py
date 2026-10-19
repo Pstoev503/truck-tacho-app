@@ -30,6 +30,7 @@ from .db import Base, engine, get_db
 from .models import Activity, AuthToken, Company, Invite, Route, Shift, User
 from .security import (Throttle, fingerprint, hash_password, new_invite_code, new_token, normalize_code,
                        now_ms, verify_password)
+from .truck_profile import TruckProfileIn, valhalla_truck_costing_options
 
 DAY_MS = 24 * 3600 * 1000
 INVITE_DAYS = 7
@@ -562,6 +563,7 @@ def patch_route(route_id: int, body: RoutePatch, user: User = Depends(current_us
 class RouteOptionsIn(BaseModel):
     origin: Waypoint
     destination: Waypoint
+    truckProfile: TruckProfileIn
 
 
 def configured_valhalla_base() -> str | None:
@@ -592,6 +594,7 @@ def route_options(body: RouteOptionsIn, _boss: User = Depends(owner)):
             {"lat": body.destination.lat, "lon": body.destination.lon},
         ],
         "costing": "truck",
+        "costing_options": valhalla_truck_costing_options(body.truckProfile),
         "units": "kilometers",
         "alternates": 2,
     }).encode("utf-8")
