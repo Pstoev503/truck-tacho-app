@@ -54,14 +54,14 @@ test('partial bad provider still visible in health diagnostics',()=>{const x=che
 const cycleFixture=blocked=>{
  const x=fixture(1);
  const planCalls={count:0};
- const initialPlan={etaMs:1000000,passability:['unknown'],segments:clone(x.request.segments)};
+ const initialPlan={etaMs:1000000,passability:['open'],segments:clone(x.request.segments)};
  const ctrl=createTrafficCycle({
   createRequest:async ({cycle,routeRevision,attempt,inputRevision,requestId,plan})=>({...clone(x.request),evaluationCycle:cycle,routeRevision,attempt,inputRevision,requestId,segments:clone(plan.segments)}),
-  evaluate:async request=>{const response=clone(x.response);for(const key of ['requestId','routeRevision','evaluationCycle','inputRevision','attempt'])response[key]=request[key];response.segments.forEach((s,i)=>s.expectedEntryAt=request.segments[i].expectedEntryAt);return response},
+  evaluate:async request=>{const response=clone(x.response);for(const key of ['requestId','routeRevision','evaluationCycle','inputRevision','attempt'])response[key]=request[key];response.segments.forEach((s,i)=>{s.expectedEntryAt=request.segments[i].expectedEntryAt;s.passability='open';s.provenance.push({...s.selected.source,kind:'passability_open',direction:request.segments[i].direction,vehicleProfileRef:request.vehicleProfileRef,validFrom:'2026-10-19T08:00:00Z',validTo:'2026-10-19T10:00:00Z'});});return response},
   plan:async ({previousPlan})=>{planCalls.count++;return {...clone(previousPlan),etaMs:previousPlan.etaMs+120000}},
   validate:(request,response,opts)=>gate(request,response,{...opts,evaluatedAt:at,sources:blocked?x.options.sources.filter(s=>s.sourceId!=='synthetic-live'):x.options.sources})
  });
  return {ctrl,planCalls,args:{cycle:'cycle-gate',routeRevision:x.request.routeRevision,initialPlan,requestIds:['gate-1','gate-2','gate-3'],inputRevisions:['in-1','in-2','in-3']}};
 };
-test('real cycle with default contract plus health gate allows planner',async()=>{const x=cycleFixture(false);const r=await x.ctrl.run(x.args);assert.equal(r.status,'limited');assert.equal(x.planCalls.count,0)});
+test('real cycle with default contract plus health gate allows planner',async()=>{const x=cycleFixture(false);const r=await x.ctrl.run(x.args);assert.equal(r.status,'unstable_estimate',JSON.stringify(r));assert.equal(x.planCalls.count,3)});
 test('real cycle source gate rejection blocks planner',async()=>{const x=cycleFixture(true);const r=await x.ctrl.run(x.args);assert.equal(r.status,'invalid_exchange');assert.equal(x.planCalls.count,0)});
