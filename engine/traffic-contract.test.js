@@ -51,3 +51,17 @@ test('selected positive duration without candidate',()=>error(run((a,b)=>{const 
 test('invalid direction rejected',()=>error(run((a,b)=>{a.segments[0].direction='sideways'}),'ENUM'));
 test('malformed alreadyIncludedIn is structured error',()=>{const [a,b]=wrapped(13);b.segments[0].incidents[0].alreadyIncludedIn={};assert.doesNotThrow(()=>validate(a,b));error(validate(a,b),'INCLUDED_ARRAY')});
 test('geometry null permitted by contract',()=>{const [a,b]=pair();a.segments[0].geometry=null;assert.equal(validate(a,b).valid,true)});
+
+const errorAt=(result,code,path)=>assert.ok(result.errors.some(e=>e.code===code&&e.path===path),JSON.stringify(result));
+const seg='response.segments[0]',reqSeg='request.segments[0]';
+test('contract reverse direction accepted',()=>{const [a,b]=pair();a.segments[0].direction='reverse';assert.equal(validate(a,b).valid,true,JSON.stringify(validate(a,b).errors))});
+for(const direction of ['backward','both'])test('contract direction rejects '+direction,()=>errorAt(run((a)=>{a.segments[0].direction=direction}),'ENUM',reqSeg+'.direction'));
+test('numeric candidate requires explicit kind',()=>errorAt(run((a,b)=>{delete b.segments[0].measured.kind}),'CANDIDATE_KIND',seg+'.measured.kind'));
+test('numeric selected requires explicit kind',()=>errorAt(run((a,b)=>{delete b.segments[0].selected.kind}),'SELECTED_KIND',seg+'.selected.kind'));
+test('selected source must match selected candidate',()=>errorAt(run((a,b)=>{b.segments[0].selected.source.recordId='foreign-record'}),'SELECTED_SOURCE',seg+'.selected.source'));
+test('selected candidate provenance cannot be empty',()=>errorAt(run((a,b)=>{b.segments[0].provenance=[]}),'CANDIDATE_LINEAGE',seg+'.selected.candidateRef'));
+test('replacement incident provenance version matches',()=>{const [a,b]=wrapped(12);b.segments[0].provenance.find(x=>x.eventRef).eventVersion='foreign-version';errorAt(validate(a,b),'EVENT_LINEAGE',seg+'.selected.appliedEventRefs[0]')});
+for(const index of [12,13])test('applied '+index+' expired event rejected',()=>{const [a,b]=wrapped(index);b.segments[0].incidents[0].validTo='2026-10-19T08:29:00Z';errorAt(validate(a,b),'APPLIED_OUTSIDE_WINDOW',seg+'.selected.appliedEventRefs[0]')});
+for(const index of [12,13])test('applied '+index+' cancelled event rejected',()=>{const [a,b]=wrapped(index);b.segments[0].incidents[0].lifecycle='cancelled';errorAt(validate(a,b),'APPLIED_LIFECYCLE',seg+'.selected.appliedEventRefs[0]')});
+test('derived base expired cannot bypass candidate gate',()=>{const [a,b]=wrapped(13);b.segments[0].measured.validTo='2026-10-19T08:29:00Z';errorAt(validate(a,b),'DERIVED_BASE_EXPIRED',seg+'.selected.baseCandidateRef')});
+test('derived base stale cannot claim fresh',()=>{const [a,b]=wrapped(13);b.segments[0].measured.status='stale';errorAt(validate(a,b),'DERIVED_BASE_STALE',seg+'.selected.status')});
