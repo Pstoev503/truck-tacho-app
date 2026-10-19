@@ -27,6 +27,14 @@
       </div>
       <ol id="points" aria-label="Точки по маршрута"></ol>
       <div id="sections" class="sections" aria-label="Участъци и избори"></div>
+      <h3>Подготовка във файл</h3>
+      <p class="notice">Файлът пази само точките, типовете път, изборите по участъци, потеглянето и паузата. Не пази дневника, профил, паркинг списъка или изчислен график. Относителното потегляне се отчита от момента на следващото планиране. Файлът не доказва проверен пътен маршрут, законност или достоверна история.</p>
+      <div class="controls">
+        <button id="draft-save" class="secondary" type="button">Запази подготовката във файл</button>
+      </div>
+      <label for="draft-file">Зареди подготовка от файл (JSON)</label>
+      <input id="draft-file" type="file" accept=".json,application/json">
+      <p id="draft-status" class="history-status" aria-live="polite">Подготовката не е запазвана или зареждана от файл.</p>
     </section>
 
     <section class="card">

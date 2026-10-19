@@ -6,6 +6,7 @@ import { indexRoute, pointAtOffset } from '../engine/route-position.js';
 import { createMapPlan } from '../engine/map-plan.js';
 import { analyze } from '../engine/tacho-rules.js';
 import { evaluateParkingCandidates } from '../engine/parking-candidates.js';
+import { parseDraftText } from './planner-draft.mjs';
 
 const fixedNow = Date.parse('2026-10-19T08:00:00Z');
 const dependencies = { buildPlan, indexRoute, pointAtOffset };
@@ -1061,4 +1062,253 @@ test('switching back to 45 and planning again restores the 45 min schedule', asy
   assert.deepEqual(restSummary(again), restSummary(first));
   assert.equal(again.arrivalUtcMs, first.arrivalUtcMs);
   assert.notEqual(again.requestId, first.requestId);
+});
+
+// UI-05: planner draft in a local file (line and choices only).
+const draftController = (overrides = {}) => {
+  let clock = fixedNow;
+  const controller = createMapPlannerController({ now: () => clock, ...overrides });
+  return { controller, setNow: value => { clock = value; } };
+};
+const prepared = controller => {
+  controller.addPoint({ lat: 0, lon: 0 });
+  controller.addPoint({ lat: 0, lon: 2 });
+  controller.addPoint({ lat: 0.5, lon: 3 });
+  controller.setRoadType(0, 'motorway');
+  controller.setChoice('section-2', { useExtension: true, dailyRest: 'reduced' });
+  controller.setDeparture({ mode: 'relative', hours: 2, minutes: 30 });
+  controller.setBreakStyle('15+30');
+};
+const draftOf = state => ({
+  points: state.points, roadTypes: state.roadTypes, choices: state.choices,
+  departure: state.departure, breakStyle: state.breakStyle
+});
+
+test('export holds only the line and choices, uses the injected clock and changes nothing', async () => {
+  const activities = JSON.stringify([{ type: 'rest', start: fixedNow - 12 * 3_600_000, end: fixedNow - 3_600_000 }]);
+  const { controller } = draftController();
+  controller.loadInitialHistory(key => (key === 'th_activities' ? activities : key === 'th_weekly_rest_end' ? String(fixedNow - 86_400_000) : null));
+  prepared(controller);
+  controller.setRoadType(1, 'ordinary');
+  await controller.plan();
+  controller.loadParkingText(parkingText(parkingRecord('parking-zz-unique', 1)));
+  await controller.evaluateParking();
+  const before = controller.getState();
+  assert.equal(before.result.state, 'estimated');
+  const { text, fileName } = controller.exportDraft();
+  const parsed = JSON.parse(text);
+  assert.deepEqual(Object.keys(parsed), ['format', 'version', 'exportedAtUtcMs', 'points', 'roadTypes', 'choices', 'departure', 'breakStyle']);
+  assert.equal(parsed.exportedAtUtcMs, fixedNow);
+  assert.equal(fileName, 'top10eu-podgotovka-20261019-0800Z.json');
+  for (const secret of ['rest', 'th_activities', String(fixedNow - 86_400_000), 'parking-zz-unique', 'synthetic-file', 'request-', 'route-', 'input-', 'arrival']) {
+    assert.ok(!text.includes(secret), `export must not contain ${secret}`);
+  }
+  const after = controller.getState();
+  assert.equal(after.result, before.result);
+  assert.equal(after.parking.result, before.parking.result);
+  assert.equal(after.inputRevision, before.inputRevision);
+  assert.deepEqual(after.history, before.history);
+});
+
+test('a saved draft loads into another planner with the same line and choices', () => {
+  const source = draftController().controller;
+  prepared(source);
+  const { text } = source.exportDraft();
+  const target = draftController().controller;
+  const outcome = target.importDraftText(text, 'kurs.json');
+  assert.deepEqual(outcome, { loaded: true });
+  assert.deepEqual(draftOf(target.getState()), draftOf(source.getState()));
+  assert.equal(target.getState().draft.mode, 'loaded');
+  assert.equal(target.getState().draft.fileName, 'kurs.json');
+});
+
+test('an invalid file changes nothing in the current preparation, plan or parking result', async () => {
+  const { controller } = draftController();
+  controller.chooseNoHistory();
+  prepared(controller);
+  controller.setRoadType(1, 'ordinary');
+  await controller.plan();
+  controller.loadParkingText(parkingText(parkingRecord('p1', 1)));
+  await controller.evaluateParking();
+  const before = controller.getState();
+  const good = JSON.parse(controller.exportDraft().text);
+  const badLastPoint = { ...good, points: [{ lat: 1, lon: 1 }, { lat: 1, lon: 2 }, { lat: 1, lon: 'x' }], roadTypes: [null, null], choices: {} };
+  for (const text of ['{oops', JSON.stringify(badLastPoint), JSON.stringify({ ...good, version: 2 }), JSON.stringify({ ...good, activities: [] })]) {
+    const outcome = controller.importDraftText(text);
+    assert.equal(outcome.loaded, false);
+    const after = controller.getState();
+    assert.deepEqual(draftOf(after), draftOf(before));
+    assert.equal(after.routeRevision, before.routeRevision);
+    assert.equal(after.inputRevision, before.inputRevision);
+    assert.equal(after.result, before.result);
+    assert.equal(after.parking.result, before.parking.result);
+    assert.deepEqual(after.history, before.history);
+    assert.equal(after.draft.mode, 'error');
+    assert.ok(after.draft.error.length > 0);
+  }
+});
+
+test('a successful import gives new revisions, drops old results, keeps the parking list and needs a new history choice', async () => {
+  const activities = JSON.stringify([{ type: 'rest', start: fixedNow - 12 * 3_600_000, end: fixedNow - 3_600_000 }]);
+  let storageReads = 0;
+  const source = draftController().controller;
+  prepared(source);
+  const { text } = source.exportDraft();
+  let adapterCalls = 0;
+  const { controller } = draftController({
+    adapter: request => { adapterCalls++; return createMapPlan(request, dependencies); }
+  });
+  controller.loadInitialHistory(key => { storageReads++; return key === 'th_activities' ? activities : null; });
+  parkingRoute(controller);
+  controller.setRoadType(0, 'motorway');
+  await controller.plan();
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)), 'list.json');
+  await controller.evaluateParking();
+  const before = controller.getState();
+  const readsBefore = storageReads;
+  controller.importDraftText(text);
+  const after = controller.getState();
+  assert.ok(after.routeRevision > before.routeRevision);
+  assert.ok(after.inputRevision > before.inputRevision);
+  assert.equal(after.result, null);
+  assert.equal(after.parking.result, null);
+  assert.equal(after.parking.count, 1);
+  assert.equal(after.parking.fileName, 'list.json');
+  assert.equal(after.history.mode, 'unselected');
+  assert.equal(after.history.snapshot, null);
+  assert.equal(storageReads, readsBefore, 'storage is neither read nor cleared');
+  assert.equal(adapterCalls, 1, 'no automatic replan');
+  const blocked = await controller.plan();
+  assert.equal(blocked.result, null);
+  assert.match(blocked.error, /Използвай дневника/);
+});
+
+test('a pending plan and a pending parking evaluation are stale after an import', async () => {
+  const source = draftController().controller;
+  prepared(source);
+  const { text } = source.exportDraft();
+  const planGate = deferred();
+  const parkingGate = deferred();
+  let firstRequest;
+  const { controller } = draftController({
+    adapter: async request => { firstRequest ??= request; await planGate.promise; return echoed(request); },
+    evaluateParking: async request => { await parkingGate.promise; return evaluateParkingCandidates(request); }
+  });
+  controller.chooseNoHistory();
+  parkingRoute(controller);
+  controller.setRoadType(0, 'ordinary');
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)));
+  const pendingPlan = controller.plan();
+  const pendingParking = controller.evaluateParking();
+  controller.importDraftText(text);
+  planGate.resolve();
+  parkingGate.resolve();
+  assert.deepEqual(await pendingPlan, { accepted: false, stale: true, result: echoed(firstRequest) });
+  assert.deepEqual(await pendingParking, { accepted: false, stale: true });
+  assert.equal(controller.getState().result, null);
+  assert.equal(controller.getState().parking.items, null);
+  assert.notEqual(`route-${controller.getState().routeRevision}`, firstRequest.routeRevision);
+});
+
+test('an old pending draft file cannot overwrite a newer import, a clear or a route edit', async () => {
+  const source = draftController().controller;
+  prepared(source);
+  const { text } = source.exportDraft();
+  const other = draftController().controller;
+  other.addPoint({ lat: 1, lon: 1 });
+  const { text: newer } = other.exportDraft();
+  const slowFile = () => {
+    const gate = deferred();
+    return { file: { name: 'old.json', size: text.length, text: () => gate.promise.then(() => text) }, release: gate.resolve };
+  };
+  for (const change of [
+    controller => controller.importDraftText(newer, 'new.json'),
+    controller => controller.clear(),
+    controller => controller.addPoint({ lat: 2, lon: 2 })
+  ]) {
+    const { controller } = draftController();
+    const slow = slowFile();
+    const pending = controller.importDraftFile(slow.file);
+    assert.equal(controller.getState().draft.mode, 'loading');
+    change(controller);
+    const expected = draftOf(controller.getState());
+    slow.release();
+    assert.deepEqual(await pending, { loaded: false, stale: true });
+    assert.deepEqual(draftOf(controller.getState()), expected, String(change));
+    assert.notEqual(controller.getState().draft.fileName, 'old.json');
+  }
+});
+
+test('a file read through File.text is validated before anything is applied', async () => {
+  const { controller } = draftController();
+  controller.addPoint({ lat: 0, lon: 0 });
+  const before = controller.getState();
+  const huge = await controller.importDraftFile({ name: 'big.json', size: 2 * 1024 * 1024, text: async () => '{}' });
+  assert.equal(huge.loaded, false);
+  assert.match(controller.getState().draft.error, /1 MiB/);
+  const bad = await controller.importDraftFile({ name: 'bad.json', size: 10, text: async () => '{"format":"top10eu-planner-draft"}' });
+  assert.equal(bad.loaded, false);
+  assert.deepEqual(controller.getState().points, before.points);
+  assert.equal(controller.getState().routeRevision, before.routeRevision);
+});
+
+test('after a valid import and an explicit history choice the real planner uses the imported choices', async () => {
+  const source = draftController().controller;
+  source.addPoint({ lat: 0, lon: 0 });
+  source.addPoint({ lat: 0, lon: 6 });
+  source.setRoadType(0, 'ordinary');
+  source.setDeparture({ mode: 'relative', hours: 2, minutes: 30 });
+  source.setBreakStyle('15+30');
+  const { text } = source.exportDraft();
+  const { controller, setNow } = draftController();
+  controller.importDraftText(text);
+  const later = fixedNow + 5 * 3_600_000;
+  setNow(later);
+  controller.chooseNoHistory();
+  await controller.plan();
+  const { result } = controller.getState();
+  assert.equal(result.state, 'estimated');
+  assert.equal(result.engineResult.departure, later + 2.5 * 3_600_000, 'relative departure counts from the new planning time');
+  assert.equal(result.engineResult.events.find(event => event.type === 'rest').label, 'Пауза 15 мин');
+});
+
+test('an unfinished imported draft does not become a plan', async () => {
+  const { controller } = draftController();
+  const text = JSON.stringify({ format: 'top10eu-planner-draft', version: 1, exportedAtUtcMs: fixedNow,
+    points: [{ lat: 1, lon: 1 }], roadTypes: [], choices: {}, departure: { mode: 'now', hours: 0, minutes: 0 }, breakStyle: '45' });
+  assert.deepEqual(controller.importDraftText(text), { loaded: true });
+  controller.chooseNoHistory();
+  const outcome = await controller.plan();
+  assert.equal(outcome.result, null);
+  assert.match(outcome.error, /поне две точки/);
+  const twoPointsNoType = JSON.parse(text);
+  twoPointsNoType.points.push({ lat: 1, lon: 2 });
+  twoPointsNoType.roadTypes = [null];
+  controller.importDraftText(JSON.stringify(twoPointsNoType));
+  controller.chooseNoHistory();
+  const untyped = await controller.plan();
+  assert.match(untyped.error, /тип път/);
+});
+
+test('export and import use no storage, network or timers', () => {
+  const touched = [];
+  const saved = {};
+  for (const name of ['fetch', 'XMLHttpRequest', 'setTimeout', 'localStorage', 'sessionStorage']) {
+    saved[name] = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { configurable: true, get: () => { touched.push(name); throw new Error(name); } });
+  }
+  try {
+    const { controller } = draftController();
+    prepared(controller);
+    const { text } = controller.exportDraft();
+    const loaded = parseDraftText(text);
+    controller.importDraftText(text);
+    assert.equal(loaded.points.length, 3);
+    assert.deepEqual(touched, []);
+  } finally {
+    for (const [name, descriptor] of Object.entries(saved)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  }
 });
