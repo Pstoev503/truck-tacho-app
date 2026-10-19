@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 import json
 from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError, HTTPError
+from urllib.parse import urlsplit
 
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.orm import Session
@@ -552,10 +553,28 @@ class RouteOptionsIn(BaseModel):
     destination: Waypoint
 
 
+def configured_valhalla_base() -> str | None:
+    configured = os.environ.get("VALHALLA_URL", "").strip()
+    if not configured or any(char.isspace() for char in configured) or "?" in configured or "#" in configured:
+        return None
+    try:
+        parsed = urlsplit(configured)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (parsed.scheme.lower() not in ("http", "https") or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment or parsed.netloc.endswith(":")
+            or (port is not None and not 1 <= port <= 65535)):
+        return None
+    return configured.rstrip("/")
+
+
 @app.post("/api/route-options")
 def route_options(body: RouteOptionsIn, _boss: User = Depends(owner)):
-    # Public Valhalla demo is for prototyping; production can point VALHALLA_URL to a managed/self-hosted service.
-    base = os.environ.get("VALHALLA_URL", "https://valhalla1.openstreetmap.de").rstrip("/")
+    base = configured_valhalla_base()
+    if base is None:
+        raise HTTPException(503, "Маршрутизаторът не е активиран")
     payload = json.dumps({
         "locations": [
             {"lat": body.origin.lat, "lon": body.origin.lon},
