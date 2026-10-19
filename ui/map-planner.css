@@ -39,6 +39,7 @@ label { display: block; margin: 8px 0 5px; color: #ddd; }
 .relative-inputs { margin: 7px 0; }
 .relative-inputs input { width: 90px; margin: 0 3px; }
 .notice { max-width: 70ch; }
+.history-status { min-height: 1.5em; padding: 10px; border-left: 4px solid #78bfff; background: #10202b; }
 .message { min-height: 1.4em; margin-bottom: 0; color: #ffcc80; }
 .caution { padding: 10px; background: #31200d; border-radius: 6px; color: #ffd08a; font-weight: 650; }
 .warnings { padding-left: 22px; }
