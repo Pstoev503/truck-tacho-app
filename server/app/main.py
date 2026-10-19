@@ -7,6 +7,7 @@
 import math
 import os
 import hmac
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -78,6 +79,8 @@ async def validation_error(_request: Request, exc: RequestValidationError):
 
 login_throttle = Throttle(max_attempts=8, window_s=15 * 60)
 join_throttle = Throttle(max_attempts=10, window_s=15 * 60)
+route_options_throttle = Throttle(max_attempts=10, window_s=60)
+route_options_lock = threading.Lock()
 
 
 # ─────────────────────────── вход ───────────────────────────
@@ -588,6 +591,11 @@ def route_options(body: RouteOptionsIn, _boss: User = Depends(owner)):
         "Content-Type": "application/json",
         "X-Client-Id": "Top10EU-route-planner",
     }, method="POST")
+    key = f"{_boss.company_id}:{_boss.id}"
+    with route_options_lock:
+        if route_options_throttle.blocked(key):
+            raise HTTPException(429, "Твърде много заявки за маршрутизиране — опитай отново след минута")
+        route_options_throttle.fail(key)
     try:
         with urlopen(req, timeout=25) as response:
             result = json.loads(response.read(5 * 1024 * 1024))
