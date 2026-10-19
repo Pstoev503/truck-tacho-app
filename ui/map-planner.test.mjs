@@ -5,6 +5,7 @@ import { buildPlan } from '../engine/plan.js';
 import { indexRoute, pointAtOffset } from '../engine/route-position.js';
 import { createMapPlan } from '../engine/map-plan.js';
 import { analyze } from '../engine/tacho-rules.js';
+import { evaluateParkingCandidates } from '../engine/parking-candidates.js';
 
 const fixedNow = Date.parse('2026-10-19T08:00:00Z');
 const dependencies = { buildPlan, indexRoute, pointAtOffset };
@@ -584,4 +585,294 @@ test('a future departure gap does not create history or clear continuous driving
   assert.equal(planned.result.engineResult.events[0].end - planned.result.engineResult.events[0].start, 30 * 60_000);
   assert.equal(planned.result.historyCoverage.complete, false);
   assert.ok(planned.result.warnings.some(warning => warning.code === 'HISTORY_INCOMPLETE'));
+});
+
+// UI-03: local parking list on the drawn route. Synthetic data only.
+const parkingRecord = (id, lon, extra = {}) => ({
+  id,
+  location: { lat: 0.001, lon },
+  sourceId: 'synthetic-file',
+  observedAt: fixedNow - 60_000,
+  expiresAt: fixedNow + 3_600_000,
+  truckAccess: 'allowed',
+  availability: 'available',
+  ...extra
+});
+const parkingRoute = controller => {
+  controller.addPoint({ lat: 0, lon: 0 });
+  controller.addPoint({ lat: 0, lon: 1 });
+};
+const parkingText = (...records) => JSON.stringify(records);
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+};
+const pendingFile = (text, name = 'late.json') => {
+  const gate = deferred();
+  return { file: { name, size: text.length, text: () => gate.promise.then(() => text) }, release: gate.resolve };
+};
+
+test('a loaded list is evaluated on the drawn geometry with echoed IDs and the injected time', async () => {
+  const seen = [];
+  const controller = makeController({
+    evaluateParking: request => { seen.push(structuredClone(request)); return evaluateParkingCandidates(request); }
+  });
+  parkingRoute(controller);
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5), parkingRecord('p2', 0.7, { truckAccess: 'unknown' })), 'list.json');
+  assert.equal(controller.getState().parking.mode, 'loaded');
+  assert.equal(controller.getState().parking.count, 2);
+  const outcome = await controller.evaluateParking();
+  assert.equal(outcome.accepted, true);
+  const [request] = seen;
+  assert.deepEqual(request.geometry, controller.getState().points);
+  assert.equal(request.evaluatedAt, fixedNow);
+  assert.equal(request.routeRevision, `route-${controller.getState().routeRevision}`);
+  assert.match(request.inputRevision, new RegExp(`^input-${controller.getState().inputRevision}\\.parking-\\d+$`));
+  assert.deepEqual(request.window, { minOffsetM: 0, maxOffsetM: indexRoute(request.geometry).totalLengthM, maxLateralDistanceM: 500 });
+  const parking = controller.getState().parking;
+  assert.equal(parking.mode, 'evaluated');
+  assert.deepEqual(parking.result.candidateIds, ['p1']);
+  assert.deepEqual(parking.result.needsVerificationIds, ['p2']);
+  assert.equal(parking.result.selectedParkingId, null);
+  assert.equal(parking.items.filter(item => item.marker).length, 2);
+});
+
+test('each evaluation uses a fresh request ID and a result with wrong echo IDs is not shown', async () => {
+  const ids = [];
+  let tamper = false;
+  const controller = makeController({
+    evaluateParking: request => {
+      ids.push(request.requestId);
+      const result = evaluateParkingCandidates(request);
+      return tamper ? { ...result, inputRevision: 'input-0.parking-0' } : result;
+    }
+  });
+  parkingRoute(controller);
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)));
+  await controller.evaluateParking();
+  await controller.evaluateParking();
+  assert.equal(new Set(ids).size, 2);
+  tamper = true;
+  const outcome = await controller.evaluateParking();
+  assert.equal(outcome.accepted, false);
+  assert.equal(controller.getState().parking.result, null);
+  assert.equal(controller.getState().parking.items, null);
+  assert.match(controller.getState().parking.error, /не е за текущия маршрут/);
+});
+
+test('route, road type, departure, choice, history and clear changes drop the parking result but keep the list', async () => {
+  const controller = makeController();
+  parkingRoute(controller);
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)));
+  const changes = [
+    () => controller.dragPoint(1, { lat: 0, lon: 1.01 }),
+    () => controller.addPoint({ lat: 0, lon: 1.02 }),
+    () => controller.removeLastPoint(),
+    () => controller.setRoadType(0, 'motorway'),
+    () => controller.setDeparture({ mode: 'relative', hours: 1, minutes: 0 }),
+    () => controller.setChoice('section-1', { useExtension: true, dailyRest: 'reduced' }),
+    () => controller.chooseNoHistory(),
+    () => controller.loadInitialHistory(() => null),
+    () => controller.storageChanged(null)
+  ];
+  for (const change of changes) {
+    await controller.evaluateParking();
+    assert.equal(controller.getState().parking.mode, 'evaluated');
+    change();
+    const parking = controller.getState().parking;
+    assert.equal(parking.result, null, String(change));
+    assert.equal(parking.items, null);
+    assert.equal(parking.mode, 'loaded');
+    assert.equal(parking.count, 1, 'the imported list stays for an explicit new evaluation');
+  }
+  await controller.evaluateParking();
+  controller.clear();
+  assert.equal(controller.getState().parking.result, null);
+  assert.equal(controller.getState().parking.count, 1);
+  const missing = await controller.evaluateParking();
+  assert.equal(missing.accepted, false);
+  assert.match(missing.error, /поне две точки/);
+});
+
+test('window changes drop the result, use km to metres and reject values past the route end', async () => {
+  const seen = [];
+  const controller = makeController({ evaluateParking: request => { seen.push(request.window); return evaluateParkingCandidates(request); } });
+  parkingRoute(controller);
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)));
+  await controller.evaluateParking();
+  assert.equal(controller.setParkingWindow({ fromKm: 50, toKm: 60.5, maxLateralM: 200 }), true);
+  assert.equal(controller.getState().parking.result, null);
+  await controller.evaluateParking();
+  assert.deepEqual(seen.at(-1), { minOffsetM: 50_000, maxOffsetM: 60_500, maxLateralDistanceM: 200 });
+  assert.deepEqual(controller.getState().parking.result.candidateIds, ['p1']);
+
+  controller.setParkingWindow({ fromKm: 0, toKm: 200, maxLateralM: 200 });
+  const pastEnd = await controller.evaluateParking();
+  assert.equal(pastEnd.accepted, false);
+  assert.match(pastEnd.error, /след края на маршрута/);
+  assert.equal(controller.getState().parking.result, null);
+
+  controller.setParkingWindow({ fromKm: 50, toKm: 60.5, maxLateralM: 200 });
+  await controller.evaluateParking();
+  assert.equal(seen.length, 3);
+  assert.equal(controller.setParkingWindow({ fromKm: '1', toKm: null, maxLateralM: 500 }), false);
+  assert.match(controller.getState().parking.windowError, /„От км“/);
+  assert.equal(controller.getState().parking.result, null);
+  const blocked = await controller.evaluateParking();
+  assert.equal(blocked.accepted, false);
+  assert.match(blocked.error, /„От км“/);
+  assert.equal(seen.length, 3, 'an invalid window is never evaluated with the previous window');
+});
+
+test('an invalid, non-array or oversized file replaces the list and removes shown results', async () => {
+  const controller = makeController();
+  parkingRoute(controller);
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)), 'good.json');
+  await controller.evaluateParking();
+  for (const [text, message] of [['{oops', /не е валиден JSON/], ['{"id":"p"}', /JSON масив/]]) {
+    controller.loadParkingText(text, 'bad.json');
+    const parking = controller.getState().parking;
+    assert.equal(parking.mode, 'error');
+    assert.match(parking.error, message);
+    assert.equal(parking.count, 0);
+    assert.equal(parking.result, null);
+    assert.equal(parking.items, null);
+    assert.equal(parking.fileName, null);
+  }
+  const oversized = await controller.loadParkingFile({ name: 'huge.json', size: 2 * 1024 * 1024, text: async () => '[]' });
+  assert.equal(oversized.loaded, false);
+  assert.match(controller.getState().parking.error, /1 MiB/);
+  const blocked = await controller.evaluateParking();
+  assert.equal(blocked.accepted, false);
+});
+
+test('malformed records stay visible as invalid next to valid ones', async () => {
+  const controller = makeController();
+  parkingRoute(controller);
+  controller.loadParkingText(JSON.stringify([parkingRecord('ok', 0.5), { id: 'bad', location: { lat: '0', lon: 0.5 } }, null]));
+  await controller.evaluateParking();
+  const { result, items } = controller.getState().parking;
+  assert.equal(result.summary.invalid, 2);
+  assert.deepEqual(result.candidateIds, ['ok']);
+  assert.ok(items.some(item => item.title === 'bad — Невалиден запис' && item.marker === null));
+  assert.ok(items.some(item => item.title === 'Запис 3 без валиден id — Невалиден запис'));
+});
+
+test('an old pending file cannot replace a newer load or come back after clear', async () => {
+  const controller = makeController();
+  parkingRoute(controller);
+  const old = pendingFile(parkingText(parkingRecord('old', 0.5)), 'old.json');
+  const firstLoad = controller.loadParkingFile(old.file);
+  assert.equal(controller.getState().parking.mode, 'loading');
+  controller.loadParkingText(parkingText(parkingRecord('new', 0.6)), 'new.json');
+  old.release();
+  assert.deepEqual(await firstLoad, { loaded: false, stale: true });
+  assert.equal(controller.getState().parking.fileName, 'new.json');
+  await controller.evaluateParking();
+  assert.deepEqual(controller.getState().parking.result.candidateIds, ['new']);
+
+  const late = pendingFile(parkingText(parkingRecord('late', 0.5)));
+  const lateLoad = controller.loadParkingFile(late.file);
+  controller.clearParking();
+  late.release();
+  assert.deepEqual(await lateLoad, { loaded: false, stale: true });
+  assert.equal(controller.getState().parking.mode, 'empty');
+  assert.equal(controller.getState().parking.items, null);
+});
+
+test('a pending evaluation cannot show old markers after a route change, a new load or clear', async () => {
+  for (const change of [
+    controller => controller.dragPoint(1, { lat: 0, lon: 0.9 }),
+    controller => controller.loadParkingText(parkingText(parkingRecord('other', 0.4))),
+    controller => controller.clearParking(),
+    controller => controller.setParkingWindow({ fromKm: null, toKm: null, maxLateralM: 100 })
+  ]) {
+    const gate = deferred();
+    const controller = makeController({ evaluateParking: async request => { await gate.promise; return evaluateParkingCandidates(request); } });
+    parkingRoute(controller);
+    controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)));
+    const pending = controller.evaluateParking();
+    assert.equal(controller.getState().parking.evaluating, true);
+    change(controller);
+    gate.resolve();
+    assert.deepEqual(await pending, { accepted: false, stale: true });
+    assert.equal(controller.getState().parking.result, null, String(change));
+    assert.equal(controller.getState().parking.items, null);
+    assert.equal(controller.getState().parking.evaluating, false);
+  }
+});
+
+test('clearing the parking list does not touch the loaded history or the tacho plan result', async () => {
+  const activities = JSON.stringify([{ type: 'rest', start: fixedNow - 12 * 3_600_000, end: fixedNow - 3_600_000 }]);
+  const controller = createMapPlannerController({ now: () => fixedNow });
+  controller.loadInitialHistory(key => (key === 'th_activities' ? activities : null));
+  parkingRoute(controller);
+  controller.setRoadType(0, 'motorway');
+  await controller.plan();
+  const planned = controller.getState().result;
+  assert.equal(planned.state, 'estimated');
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)));
+  await controller.evaluateParking();
+  const before = controller.getState();
+  controller.clearParking();
+  const after = controller.getState();
+  assert.equal(after.history.mode, 'loaded');
+  assert.deepEqual(after.history, before.history);
+  assert.equal(after.result, planned, 'the plan, its ETA and rests are unchanged');
+  assert.equal(after.inputRevision, before.inputRevision);
+  assert.equal(after.parking.mode, 'empty');
+});
+
+test('the parking evaluation never changes the plan, its rest places or the history', async () => {
+  const controller = readyController({}, 400_000);
+  await controller.plan();
+  const before = controller.getState();
+  assert.equal(before.result.state, 'estimated');
+  const restEvents = JSON.stringify(before.result.events.filter(event => event.type === 'rest'));
+  controller.loadParkingText(parkingText(parkingRecord('p1', 1)));
+  await controller.evaluateParking();
+  const after = controller.getState();
+  assert.equal(after.result, before.result);
+  assert.equal(JSON.stringify(after.result.events.filter(event => event.type === 'rest')), restEvents);
+  assert.equal(after.routeRevision, before.routeRevision);
+  assert.equal(after.inputRevision, before.inputRevision);
+});
+
+test('the imported list and the evaluation request are frozen and not mutated', async () => {
+  let received;
+  const controller = makeController({ evaluateParking: request => { received = request; return evaluateParkingCandidates(request); } });
+  parkingRoute(controller);
+  const text = parkingText(parkingRecord('p1', 0.5), parkingRecord('p2', 0.6, { expiresAt: fixedNow }));
+  controller.loadParkingText(text);
+  await controller.evaluateParking();
+  assert.ok(Object.isFrozen(received.parkingCandidates));
+  assert.ok(Object.isFrozen(received.parkingCandidates[0].location));
+  assert.equal(JSON.stringify(received.parkingCandidates), text);
+});
+
+test('loading and evaluating parkings use no storage, network or timers', async () => {
+  const touched = [];
+  const saved = {};
+  const trap = name => (...args) => { touched.push(name); throw new Error(`${name} must not be used`); };
+  for (const name of ['fetch', 'XMLHttpRequest', 'WebSocket', 'setTimeout', 'setInterval']) {
+    saved[name] = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { value: trap(name), configurable: true, writable: true });
+  }
+  const storage = new Proxy({}, { get: (_, key) => { touched.push(`localStorage.${String(key)}`); return trap('localStorage'); } });
+  saved.localStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true, writable: true });
+  try {
+    const controller = makeController();
+    parkingRoute(controller);
+    await controller.loadParkingFile({ name: 'list.json', size: 10, text: async () => parkingText(parkingRecord('p1', 0.5)) });
+    await controller.evaluateParking();
+    controller.clearParking();
+    assert.deepEqual(touched, []);
+  } finally {
+    for (const [name, descriptor] of Object.entries(saved)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  }
 });
