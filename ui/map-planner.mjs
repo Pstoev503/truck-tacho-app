@@ -1,7 +1,12 @@
 import { createMapPlan } from '../engine/map-plan.js';
 import { buildPlan } from '../engine/plan.js';
 import { indexRoute, pointAtOffset } from '../engine/route-position.js';
+import { evaluateParkingCandidates } from '../engine/parking-candidates.js';
 import { loadPlannerInitialState } from './planner-initial-state.mjs';
+import {
+  describeParkingResults, parkingItemNode, parkingSummaryText, parkingTooltipNode, parseParkingText,
+  readParkingFile, validateParkingWindow, windowInMeters
+} from './planner-parking.mjs';
 
 const ROAD_TYPES = new Set(['motorway', 'ordinary']);
 const EARTH_RADIUS_M = 6_371_000;
@@ -12,6 +17,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 export function createMapPlannerController({
   now = Date.now,
   adapter = request => createMapPlan(request, { buildPlan, indexRoute, pointAtOffset }),
+  evaluateParking = evaluateParkingCandidates,
   onChange = () => {}
 } = {}) {
   const points = [];
@@ -25,6 +31,13 @@ export function createMapPlannerController({
   let error = null;
   let departure = { mode: 'now', hours: 0, minutes: 0 };
   let history = { mode: 'unselected', snapshot: null, summary: null, error: null };
+  // The imported list survives route edits; any evaluation result does not.
+  const parking = {
+    mode: 'empty', fileName: null, candidates: null, error: null,
+    window: validateParkingWindow(), windowError: null,
+    revision: 0, loadToken: 0, evaluationToken: 0, requestCounter: 0,
+    evaluating: false, result: null, items: null
+  };
 
   const snapshot = () => ({
     points: clone(points),
@@ -35,17 +48,52 @@ export function createMapPlannerController({
     departure: { ...departure },
     history: clone(history),
     result,
-    error
+    error,
+    parking: {
+      mode: parking.mode,
+      fileName: parking.fileName,
+      count: parking.candidates ? parking.candidates.length : 0,
+      error: parking.error,
+      window: { ...parking.window },
+      windowError: parking.windowError,
+      evaluating: parking.evaluating,
+      result: parking.result,
+      items: parking.items
+    }
   });
   const notify = () => onChange(snapshot());
+  const dropParkingResult = () => {
+    parking.revision++;
+    parking.evaluationToken++;
+    parking.evaluating = false;
+    parking.result = null;
+    parking.items = null;
+  };
   const invalidate = routeChanged => {
     if (routeChanged) routeRevision++;
     inputRevision++;
     activeRequestId = null;
     result = null;
     error = null;
+    dropParkingResult();
+    if (parking.mode === 'evaluated') parking.mode = 'loaded';
+    if (parking.mode === 'loaded') parking.error = null;
     notify();
   };
+  const setParkingList = (candidates, fileName) => {
+    parking.mode = 'loaded';
+    parking.fileName = fileName;
+    parking.candidates = candidates;
+    parking.error = null;
+  };
+  const failParking = message => {
+    parking.mode = 'error';
+    parking.fileName = null;
+    parking.candidates = null;
+    parking.error = message;
+  };
+  const parkingMessage = caught => (caught instanceof Error && caught.message) ||
+    'Файлът с паркинги не може да бъде зареден.';
   const validPoint = point => point && Number.isFinite(point.lat) &&
     Number.isFinite(point.lon) && Math.abs(point.lat) < 85 &&
     Math.abs(point.lon) <= 180;
@@ -109,8 +157,135 @@ export function createMapPlannerController({
     };
   }
 
+  async function evaluateParkingList() {
+    if (!parking.candidates) {
+      parking.error = 'Първо зареди файл с паркинги.';
+      notify();
+      return { accepted: false, error: parking.error };
+    }
+    // Any earlier result goes first, so the request carries the new revision.
+    dropParkingResult();
+    parking.mode = 'loaded';
+    let request;
+    try {
+      if (parking.windowError) throw new Error(parking.windowError);
+      if (points.length < 2) throw new Error('Начертай маршрут с поне две точки преди оценка на паркингите.');
+      const currentNow = now();
+      if (!Number.isSafeInteger(currentNow) || currentNow < 0) throw new Error('Не може да се определи текущият час.');
+      const geometry = clone(points);
+      let routeLengthM;
+      try {
+        routeLengthM = indexRoute(geometry).totalLengthM;
+      } catch {
+        throw new Error('Точките не образуват валидна линия; паркингите не са оценени.');
+      }
+      request = {
+        requestId: `parking-${++parking.requestCounter}`,
+        routeRevision: `route-${routeRevision}`,
+        inputRevision: `input-${inputRevision}.parking-${parking.revision}`,
+        geometry,
+        evaluatedAt: currentNow,
+        window: windowInMeters(parking.window, routeLengthM),
+        parkingCandidates: parking.candidates
+      };
+    } catch (caught) {
+      parking.error = caught.message;
+      notify();
+      return { accepted: false, error: parking.error };
+    }
+
+    const token = parking.evaluationToken;
+    parking.error = null;
+    parking.evaluating = true;
+    notify();
+    let evaluated;
+    try {
+      evaluated = await evaluateParking(request);
+    } catch {
+      if (token !== parking.evaluationToken) return { accepted: false, stale: true };
+      parking.evaluating = false;
+      parking.error = 'Паркингите не можаха да бъдат оценени. Опитай отново.';
+      notify();
+      return { accepted: false, error: parking.error };
+    }
+    if (token !== parking.evaluationToken) return { accepted: false, stale: true };
+    parking.evaluating = false;
+    if (evaluated?.requestId !== request.requestId ||
+        evaluated?.routeRevision !== request.routeRevision ||
+        evaluated?.inputRevision !== request.inputRevision) {
+      parking.error = 'Оценката не е за текущия маршрут и списък. Опитай отново.';
+      notify();
+      return { accepted: false, error: parking.error };
+    }
+    if (evaluated.status !== 'evaluated') {
+      parking.error = 'Паркингите не могат да бъдат оценени за тази линия и избрания участък.';
+      notify();
+      return { accepted: false, error: parking.error };
+    }
+    parking.mode = 'evaluated';
+    parking.result = evaluated;
+    parking.items = describeParkingResults(evaluated, parking.candidates);
+    notify();
+    return { accepted: true, result: evaluated };
+  }
+
   return {
     getState: snapshot,
+    loadParkingText(text, fileName = null) {
+      parking.loadToken++;
+      dropParkingResult();
+      try {
+        setParkingList(parseParkingText(text), fileName);
+      } catch (caught) {
+        failParking(parkingMessage(caught));
+      }
+      notify();
+      return { loaded: parking.mode === 'loaded', error: parking.error };
+    },
+    async loadParkingFile(file) {
+      const token = ++parking.loadToken;
+      dropParkingResult();
+      parking.mode = 'loading';
+      parking.fileName = null;
+      parking.candidates = null;
+      parking.error = null;
+      notify();
+      let candidates;
+      try {
+        candidates = await readParkingFile(file);
+      } catch (caught) {
+        if (token !== parking.loadToken) return { loaded: false, stale: true };
+        failParking(parkingMessage(caught));
+        notify();
+        return { loaded: false, error: parking.error };
+      }
+      if (token !== parking.loadToken) return { loaded: false, stale: true };
+      setParkingList(candidates, typeof file.name === 'string' ? file.name : null);
+      notify();
+      return { loaded: true };
+    },
+    clearParking() {
+      parking.loadToken++;
+      dropParkingResult();
+      parking.mode = 'empty';
+      parking.fileName = null;
+      parking.candidates = null;
+      parking.error = null;
+      notify();
+    },
+    setParkingWindow(nextWindow) {
+      dropParkingResult();
+      if (parking.mode === 'evaluated') parking.mode = 'loaded';
+      try {
+        parking.window = validateParkingWindow(nextWindow);
+        parking.windowError = null;
+      } catch (caught) {
+        parking.windowError = caught.message;
+      }
+      notify();
+      return parking.windowError === null;
+    },
+    evaluateParking: evaluateParkingList,
     loadInitialHistory(readStorage) {
       history = { mode: 'loading', snapshot: null, summary: null, error: null };
       invalidate(false);
@@ -432,7 +607,18 @@ function renderPlanner(state, map, layers, controller) {
       }
       map.fitBounds(L.latLngBounds(state.points.map(point => [point.lat, point.lon])).pad(0.12));
     }
+    for (const item of state.parking.items ?? []) {
+      if (!item.marker) continue;
+      const candidate = item.disposition === 'geometric-candidate';
+      const marker = L.circleMarker([item.marker.lat, item.marker.lon], {
+        radius: 8, weight: 3, color: candidate ? '#b8e986' : '#ffcc80',
+        dashArray: candidate ? null : '4 3', fillColor: '#111', fillOpacity: 0.9
+      });
+      marker.bindTooltip(parkingTooltipNode(document, item));
+      layers.addLayer(marker);
+    }
   }
+  renderParking(state.parking);
 
   $('relative-inputs').hidden = $('departure-mode').value !== 'relative';
   const historyStatus = $('history-status');
@@ -461,6 +647,32 @@ function renderPlanner(state, map, layers, controller) {
     ? 'Добави поне две точки върху картата.' : '');
   $('plan').disabled = state.points.length < 2 || !['loaded', 'none'].includes(state.history.mode);
   renderSchedule(state.result);
+}
+
+const parkingFileText = {
+  empty: 'Няма зареден списък с паркинги.',
+  loading: 'Зареждане на локалния файл…'
+};
+
+function renderParking(parking) {
+  const $ = id => document.getElementById(id);
+  const status = $('parking-status');
+  if (parking.mode === 'loaded' || parking.mode === 'evaluated') {
+    const name = parking.fileName ? ` от „${parking.fileName}“` : '';
+    status.textContent = `Зареден локален списък${name}: ${parking.count} записа. Данните са от файла и не са проверени.`;
+  } else if (parking.mode === 'error') {
+    status.textContent = parking.error;
+  } else {
+    status.textContent = parkingFileText[parking.mode] ?? parkingFileText.empty;
+  }
+  $('parking-message').textContent = parking.windowError ?? (parking.mode === 'error' ? '' : parking.error ?? '');
+  $('parking-evaluate').disabled = parking.evaluating || !['loaded', 'evaluated'].includes(parking.mode);
+  $('parking-clear').disabled = parking.mode === 'empty';
+  const list = $('parking-results');
+  list.replaceChildren(...(parking.items ?? []).map(item => parkingItemNode(document, item)));
+  $('parking-summary').textContent = parking.result
+    ? `${parkingSummaryText(parking.result.summary)} Нито един не е избран или резервиран; ETA и почивките не са променени.`
+    : (parking.evaluating ? 'Оценяване…' : '');
 }
 
 function renderSchedule(result) {
@@ -531,6 +743,27 @@ if (typeof document !== 'undefined') {
   document.getElementById('history-use').addEventListener('click', loadHistory);
   document.getElementById('history-refresh').addEventListener('click', loadHistory);
   document.getElementById('history-none').addEventListener('click', () => controller.chooseNoHistory());
+  const parkingWindowInput = () => {
+    const kmOrNull = id => {
+      const input = document.getElementById(id);
+      return input.value.trim() === '' ? null : input.valueAsNumber;
+    };
+    controller.setParkingWindow({
+      fromKm: kmOrNull('parking-from-km'),
+      toKm: kmOrNull('parking-to-km'),
+      maxLateralM: document.getElementById('parking-max-m').valueAsNumber
+    });
+  };
+  for (const id of ['parking-from-km', 'parking-to-km', 'parking-max-m']) {
+    document.getElementById(id).addEventListener('change', parkingWindowInput);
+  }
+  document.getElementById('parking-file').addEventListener('change', event => {
+    const [file] = event.target.files;
+    event.target.value = '';
+    if (file) controller.loadParkingFile(file);
+  });
+  document.getElementById('parking-evaluate').addEventListener('click', () => controller.evaluateParking());
+  document.getElementById('parking-clear').addEventListener('click', () => controller.clearParking());
   window.addEventListener('storage', event => {
     if (event.storageArea === localStorage) controller.storageChanged(event.key);
   });

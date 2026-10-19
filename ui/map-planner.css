@@ -47,6 +47,17 @@ label { display: block; margin: 8px 0 5px; color: #ddd; }
 #schedule li, #assumptions li { margin: 8px 0; line-height: 1.5; }
 .drive { color: #b8e986; }
 .rest { color: #9ac9ff; }
+.parking-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.parking-fields label { min-width: 0; font-size: .9rem; }
+.parking-fields input { display: block; width: 100%; margin-top: 4px; }
+input[type="file"] { width: 100%; }
+.parking-results { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.parking-item { padding: 10px 12px; border: 1px solid var(--line); border-left-width: 5px; border-radius: 8px; overflow-wrap: anywhere; }
+.parking-item p { margin: 4px 0; font-size: .92rem; }
+.parking-geometric-candidate { border-left-color: #b8e986; }
+.parking-needs-verification { border-left-color: #ffcc80; border-left-style: dashed; }
+.parking-excluded { border-left-color: #777; color: #c8c8c8; }
+.parking-invalid { border-left-color: #ff7b72; }
 .leaflet-container { font: inherit; }
 .leaflet-control-attribution { font-size: 11px; }
 
@@ -54,7 +65,7 @@ label { display: block; margin: 8px 0 5px; color: #ddd; }
   main { width: min(100% - 16px, 980px); padding-top: 9px; }
   .card { padding: 12px; }
   #map { height: 48vh; min-height: 280px; }
-  .section-fields { grid-template-columns: 1fr; }
+  .section-fields, .parking-fields { grid-template-columns: 1fr; }
   .section-fields select { max-width: none; }
   .controls button { flex: 1 1 100%; }
   .relative-inputs input { width: 74px; }
