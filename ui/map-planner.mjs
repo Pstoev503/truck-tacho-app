@@ -140,7 +140,8 @@ export function createMapPlannerController({
       invalidate(false);
     },
     storageChanged(key) {
-      if (!['th_activities', 'th_weekly_rest_end'].includes(key) || history.mode !== 'loaded') return false;
+      if ((key !== null && !['th_activities', 'th_weekly_rest_end'].includes(key)) ||
+          history.mode !== 'loaded') return false;
       history = {
         mode: 'stale',
         snapshot: null,
@@ -530,6 +531,8 @@ if (typeof document !== 'undefined') {
   document.getElementById('history-use').addEventListener('click', loadHistory);
   document.getElementById('history-refresh').addEventListener('click', loadHistory);
   document.getElementById('history-none').addEventListener('click', () => controller.chooseNoHistory());
-  window.addEventListener('storage', event => controller.storageChanged(event.key));
+  window.addEventListener('storage', event => {
+    if (event.storageArea === localStorage) controller.storageChanged(event.key);
+  });
   renderPlanner(controller.getState(), map, layers, controller);
 }

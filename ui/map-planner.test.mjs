@@ -422,6 +422,71 @@ test('a storage event for either history key invalidates active history and requ
   await controller.plan();
   assert.equal(requests.length, 2);
   assert.equal(requests[1].initialState.activities[0].start, fixedNow - 120_000);
+  const weeklyInputRevision = controller.getState().inputRevision;
+  const weeklyRouteRevision = controller.getState().routeRevision;
+  assert.equal(controller.storageChanged('th_weekly_rest_end'), true);
+  assert.equal(controller.getState().history.mode, 'stale');
+  assert.equal(controller.getState().history.snapshot, null);
+  assert.equal(controller.getState().result, null);
+  assert.equal(controller.getState().inputRevision, weeklyInputRevision + 1);
+  assert.equal(controller.getState().routeRevision, weeklyRouteRevision);
+});
+
+test('storage clear invalidates loaded history and a shown result', async () => {
+  const controller = makeController({ adapter: request => createMapPlan(request, dependencies) });
+  controller.loadInitialHistory(historyReader([
+    { type: 'rest', start: fixedNow - 14 * 24 * 60 * 60_000, end: fixedNow }
+  ], fixedNow));
+  twoPoints(controller);
+  controller.setRoadType(0, 'ordinary');
+  const planned = await controller.plan();
+  assert.equal(planned.result.engineResult.confirmed, true);
+  const routeRevision = controller.getState().routeRevision;
+  const inputRevision = controller.getState().inputRevision;
+  assert.equal(controller.storageChanged(null), true);
+  assert.equal(controller.getState().history.mode, 'stale');
+  assert.equal(controller.getState().history.snapshot, null);
+  assert.equal(controller.getState().result, null);
+  assert.equal(controller.getState().inputRevision, inputRevision + 1);
+  assert.equal(controller.getState().routeRevision, routeRevision);
+  assert.equal((await controller.plan()).result, null);
+});
+
+test('storage clear invalidates pending history plans and rejects their late result', async () => {
+  let resolve;
+  const controller = makeController({ adapter: request => new Promise(done => {
+    resolve = result => done(echoed(request, result));
+  }) });
+  controller.loadInitialHistory(historyReader([{ type: 'rest', start: fixedNow - 24 * 60 * 60_000, end: fixedNow }]));
+  twoPoints(controller);
+  controller.setRoadType(0, 'ordinary');
+  const pending = controller.plan();
+  const routeRevision = controller.getState().routeRevision;
+  const inputRevision = controller.getState().inputRevision;
+  assert.equal(controller.storageChanged(null), true);
+  assert.equal(controller.getState().history.mode, 'stale');
+  assert.equal(controller.getState().history.snapshot, null);
+  assert.equal(controller.getState().result, null);
+  assert.equal(controller.getState().inputRevision, inputRevision + 1);
+  assert.equal(controller.getState().routeRevision, routeRevision);
+  resolve({ state: 'estimated', id: 'late-cleared-history' });
+  assert.equal((await pending).stale, true);
+  assert.equal(controller.getState().result, null);
+});
+
+test('storage clear does not alter explicit no-history mode or unrelated-key behavior', async () => {
+  const controller = readyController({ adapter: request => echoed(request) });
+  twoPoints(controller);
+  controller.setRoadType(0, 'ordinary');
+  await controller.plan();
+  const before = controller.getState();
+  assert.equal(controller.storageChanged(null), false);
+  assert.equal(controller.storageChanged('th_jokers'), false);
+  const after = controller.getState();
+  assert.equal(after.history.mode, 'none');
+  assert.equal(after.inputRevision, before.inputRevision);
+  assert.equal(after.routeRevision, before.routeRevision);
+  assert.equal(after.result, before.result);
 });
 
 test('a late plan is rejected when history is loaded or disabled', async () => {
