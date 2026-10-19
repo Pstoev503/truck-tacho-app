@@ -1,6 +1,7 @@
 import { createMapPlan } from '../engine/map-plan.js';
 import { buildPlan } from '../engine/plan.js';
 import { indexRoute, pointAtOffset } from '../engine/route-position.js';
+import { loadPlannerInitialState } from './planner-initial-state.mjs';
 
 const ROAD_TYPES = new Set(['motorway', 'ordinary']);
 const EARTH_RADIUS_M = 6_371_000;
@@ -23,6 +24,7 @@ export function createMapPlannerController({
   let result = null;
   let error = null;
   let departure = { mode: 'now', hours: 0, minutes: 0 };
+  let history = { mode: 'unselected', snapshot: null, summary: null, error: null };
 
   const snapshot = () => ({
     points: clone(points),
@@ -31,6 +33,7 @@ export function createMapPlannerController({
     routeRevision,
     inputRevision,
     departure: { ...departure },
+    history: clone(history),
     result,
     error
   });
@@ -89,7 +92,9 @@ export function createMapPlannerController({
             id, fromM, toM, roadType, source: 'manual'
           }))
         },
-        initialState: { activities: [], lastWeeklyRestEnd: null, source: 'none' },
+        initialState: history.mode === 'loaded'
+          ? clone(history.snapshot)
+          : { activities: [], lastWeeklyRestEnd: null, source: 'none' },
         choices: {
           breakStyle: '45',
           multiManning: false,
@@ -106,6 +111,46 @@ export function createMapPlannerController({
 
   return {
     getState: snapshot,
+    loadInitialHistory(readStorage) {
+      history = { mode: 'loading', snapshot: null, summary: null, error: null };
+      invalidate(false);
+      try {
+        const loaded = loadPlannerInitialState({ readStorage, now });
+        history = {
+          mode: 'loaded',
+          snapshot: loaded.initialState,
+          summary: loaded.summary,
+          error: null
+        };
+        notify();
+        return { loaded: true, history: snapshot().history };
+      } catch (caught) {
+        history = {
+          mode: 'error',
+          snapshot: null,
+          summary: null,
+          error: caught instanceof Error ? caught.message : 'Локалният дневник не може да бъде прочетен.'
+        };
+        notify();
+        return { loaded: false, error: history.error };
+      }
+    },
+    chooseNoHistory() {
+      history = { mode: 'none', snapshot: null, summary: null, error: null };
+      invalidate(false);
+    },
+    storageChanged(key) {
+      if ((key !== null && !['th_activities', 'th_weekly_rest_end'].includes(key)) ||
+          history.mode !== 'loaded') return false;
+      history = {
+        mode: 'stale',
+        snapshot: null,
+        summary: null,
+        error: 'Дневникът на устройството се промени. Опресни го или продължи без начална история.'
+      };
+      invalidate(false);
+      return true;
+    },
     addPoint(point) {
       if (!validPoint(point)) throw new TypeError('Точката е извън поддържаните координати.');
       if (points.length) roadTypes.push(null);
@@ -172,11 +217,15 @@ export function createMapPlannerController({
     async plan() {
       let request;
       try {
+        if (!['loaded', 'none'].includes(history.mode)) {
+          throw new Error('Използвай дневника от устройството или избери изрично „Продължи без начална история“.');
+        }
         if (points.length < 2) throw new Error('Добави поне две точки върху картата.');
         request = requestForPlan().request;
       } catch (caught) {
           error = caught.message === 'Добави поне две точки върху картата.' ||
-            caught.message === 'Избери изричен тип път за всеки положителен участък.'
+            caught.message === 'Избери изричен тип път за всеки положителен участък.' ||
+            caught.message.startsWith('Използвай дневника')
             ? caught.message : 'Точките не образуват валидна линия; провери координатите и разстоянията.';
           result = null;
         notify();
@@ -386,10 +435,31 @@ function renderPlanner(state, map, layers, controller) {
   }
 
   $('relative-inputs').hidden = $('departure-mode').value !== 'relative';
+  const historyStatus = $('history-status');
+  if (state.history.mode === 'loaded') {
+    const summary = state.history.summary;
+    const boundary = summary.latestBoundary === null
+      ? 'няма записана времева граница' : formatSofiaTime(summary.latestBoundary);
+    historyStatus.textContent = `Зареден локален дневник: ${summary.activityCount} записа; последна времева граница: ${boundary}. Самоличността и достоверността не са независимо потвърдени.`;
+  } else if (state.history.mode === 'none') {
+    historyStatus.textContent = 'Избрано: без начална история.';
+  } else if (state.history.mode === 'stale') {
+    historyStatus.textContent = state.history.error;
+  } else if (state.history.mode === 'error') {
+    historyStatus.textContent = state.history.error;
+  } else if (state.history.mode === 'loading') {
+    historyStatus.textContent = 'Зареждане на локалния дневник…';
+  } else {
+    historyStatus.textContent = 'Без начална история. Избери дневника от устройството или продължи без него.';
+  }
+  $('history-refresh').hidden = !['loaded', 'stale', 'error'].includes(state.history.mode);
+  $('history-use').disabled = state.history.mode === 'loading';
+  $('history-refresh').disabled = state.history.mode === 'loading';
+  $('history-none').disabled = state.history.mode === 'none';
   $('schedule-card').hidden = !state.result || state.result.state !== 'estimated';
   $('message').textContent = state.error ?? (state.points.length < 2
     ? 'Добави поне две точки върху картата.' : '');
-  $('plan').disabled = state.points.length < 2;
+  $('plan').disabled = state.points.length < 2 || !['loaded', 'none'].includes(state.history.mode);
   renderSchedule(state.result);
 }
 
@@ -422,7 +492,8 @@ function renderSchedule(result) {
     warnings.append(element('li', `Изборът за участък ${(item.stageIndex ?? 0) + 1} не е приложен: ${item.reason}`));
   }
   for (const assumption of result.assumptions ?? []) assumptions.append(element('li', assumption));
-  if (!assumptions.childElementCount) assumptions.append(element('li', 'Началната история липсва; правото и данните не са потвърдени.'));
+  if (!assumptions.childElementCount) assumptions.append(element('li', 'Началната история и пълнотата ѝ не са независимо потвърдени.'));
+  assumptions.append(element('li', 'Самоличността и достоверността на началния дневник не са независимо потвърдени.'));
 }
 
 if (typeof document !== 'undefined') {
@@ -456,5 +527,12 @@ if (typeof document !== 'undefined') {
       }));
   }
   document.getElementById('plan').addEventListener('click', () => controller.plan());
+  const loadHistory = () => controller.loadInitialHistory(key => localStorage.getItem(key));
+  document.getElementById('history-use').addEventListener('click', loadHistory);
+  document.getElementById('history-refresh').addEventListener('click', loadHistory);
+  document.getElementById('history-none').addEventListener('click', () => controller.chooseNoHistory());
+  window.addEventListener('storage', event => {
+    if (event.storageArea === localStorage) controller.storageChanged(event.key);
+  });
   renderPlanner(controller.getState(), map, layers, controller);
 }
