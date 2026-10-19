@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {evaluateTrafficSourceHealth as evaluate} from './traffic-source-health.js';
 const at=100000;
-const source=(changes={})=>({sourceId:'alpha',expectedIntervalMs:1000,maxAgeMs:5000,lastSuccessAt:99000,lastAttemptAt:99000,consecutiveFailures:0,permissionState:'declared-allowed',licenseRef:'caller-declared-license',...changes});
+const source=(changes={})=>({sourceId:'alpha',expectedIntervalMs:1000,maxAgeMs:5000,lastSuccessAt:99001,lastAttemptAt:99001,consecutiveFailures:0,permissionState:'declared-allowed',licenseRef:'caller-declared-license',...changes});
 const run=(sources=[source()],evaluatedAt=at)=>evaluate({evaluatedAt,sources});
 test('fresh permitted and licensed is usable',()=>{const x=run();assert.equal(x.status,'usable');assert.equal(x.sources[0].transportState,'fresh');assert.equal(x.counts.usable,1)});
 test('stale at exact maxAge boundary',()=>assert.equal(run([source({lastSuccessAt:95000,lastAttemptAt:95000})]).sources[0].transportState,'stale'));
@@ -27,7 +27,7 @@ test('late interval warns without making data stale',()=>{const x=run([source({l
 test('partial invalid leaves healthy provider usable',()=>{const x=run([source(),source({sourceId:'broken',maxAgeMs:0})]);assert.equal(x.status,'degraded');assert.equal(x.counts.usable,1);assert.equal(x.counts.invalid,1)});
 test('partial stale leaves healthy provider usable',()=>{const x=run([source(),source({sourceId:'old',lastSuccessAt:90000,lastAttemptAt:90000})]);assert.equal(x.status,'degraded');assert.equal(x.counts.usable,1)});
 test('no usable sources unavailable',()=>assert.equal(run([source({permissionState:'denied'}),source({sourceId:'old',lastSuccessAt:90000,lastAttemptAt:90000})]).status,'unavailable'));
-test('frozen input remains immutable',()=>{const a=Object.freeze(source());const list=Object.freeze([a]);const input=Object.freeze({evaluatedAt:at,sources:list});assert.equal(evaluate(input).status,'usable');assert.equal(a.lastSuccessAt,99000)});
+test('frozen input remains immutable',()=>{const a=Object.freeze(source());const list=Object.freeze([a]);const input=Object.freeze({evaluatedAt:at,sources:list});assert.equal(evaluate(input).status,'usable');assert.equal(a.lastSuccessAt,99001)});
 test('stable source order',()=>{const x=run([source({sourceId:'z'}),source({sourceId:'a'}),source({sourceId:'m'})]);assert.deepEqual(x.sources.map(s=>s.sourceId),['z','a','m'])});
 test('no ambient clock',()=>{const old=Date.now;Date.now=()=>{throw Error('ambient clock')};try{assert.equal(run().status,'usable')}finally{Date.now=old}});
 test('empty list unavailable',()=>assert.equal(run([]).status,'unavailable'));
@@ -39,3 +39,10 @@ test('fraction failures rejected',()=>assert.equal(run([source({consecutiveFailu
 test('invalid license type rejected',()=>assert.equal(run([source({licenseRef:42})]).sources[0].transportState,'invalid'));
 test('all usable providers are usable',()=>assert.equal(run([source(),source({sourceId:'beta'})]).status,'usable'));
 test('recent failure on fresh data is still usable for evaluation',()=>{const x=run([source({lastAttemptAt:99999,consecutiveFailures:1})]);assert.equal(x.sources[0].usableForEvaluation,true);assert.equal(x.status,'degraded')});
+
+test('expected interval minus one ms has no late warning',()=>{const x=run([source({lastSuccessAt:99001,lastAttemptAt:99001})]);assert.equal(x.sources[0].transportState,'fresh');assert.equal(x.sources[0].warnings.includes('LATE_UPDATE'),false)});
+test('expected interval exact boundary warns late but stays fresh',()=>{const x=run([source({lastSuccessAt:99000,lastAttemptAt:99000})]);assert.equal(x.sources[0].transportState,'fresh');assert.ok(x.sources[0].warnings.includes('LATE_UPDATE'))});
+test('expected interval plus one ms warns late but stays fresh',()=>{const x=run([source({lastSuccessAt:98999,lastAttemptAt:98999})]);assert.equal(x.sources[0].transportState,'fresh');assert.ok(x.sources[0].warnings.includes('LATE_UPDATE'))});
+for(const [name,input] of [['null',null],['array',[]],['string','not-an-object'],['number',42],['undefined',undefined]])test('invalid envelope '+name+' is structured invalid-input',()=>{const x=evaluate(input);assert.equal(x.status,'invalid-input');assert.equal(x.reason,'INVALID_ENVELOPE');assert.deepEqual(x.sources,[]);assert.deepEqual(x.counts,{total:0,usable:0,invalid:0})});
+test('consecutive failures with unknown attempt preserve fresh but degrade',()=>{const x=run([source({lastSuccessAt:99999,lastAttemptAt:null,consecutiveFailures:2})]);assert.equal(x.sources[0].transportState,'fresh');assert.equal(x.sources[0].usableForEvaluation,true);assert.ok(x.sources[0].warnings.includes('RECENT_FAILURES'));assert.equal(x.status,'degraded');assert.equal(x.reason,'PARTIAL_OR_DEGRADED_SOURCES');assert.equal(x.sources[0].ageMs,1)});
+test('unknown failed-at timestamp never fabricated',()=>{const x=run([source({lastSuccessAt:99999,lastAttemptAt:null,consecutiveFailures:2})]);assert.equal(Object.hasOwn(x.sources[0],'lastAttemptAt'),false)});
