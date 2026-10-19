@@ -30,6 +30,10 @@ from .security import (Throttle, fingerprint, hash_password, new_invite_code, ne
 
 DAY_MS = 24 * 3600 * 1000
 INVITE_DAYS = 7
+TOKEN_IDLE_DAYS = 30
+TOKEN_MAX_AGE_DAYS = 90
+TOKEN_IDLE_MS = TOKEN_IDLE_DAYS * DAY_MS
+TOKEN_MAX_AGE_MS = TOKEN_MAX_AGE_DAYS * DAY_MS
 MAX_ACTIVITIES_PER_SYNC = 20000
 MAX_TS = 4_102_444_800_000  # 2100 г.
 MAX_BODY = 5 * 1024 * 1024
@@ -86,6 +90,11 @@ def current_user(authorization: str = Header(default=""), db: Session = Depends(
     if not user or not user.active:
         raise HTTPException(401, "Профилът е спрян")
     t = now_ms()
+    if (type(tok.created_at) is not int or type(tok.last_used_at) is not int
+            or not 0 <= tok.created_at <= tok.last_used_at <= t
+            or t - tok.last_used_at >= TOKEN_IDLE_MS
+            or t - tok.created_at >= TOKEN_MAX_AGE_MS):
+        raise HTTPException(401, "Входът е изтекъл — влез отново")
     if t - tok.last_used_at > 3600_000:
         tok.last_used_at = t
         db.commit()

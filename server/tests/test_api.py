@@ -7,8 +7,10 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://taho:taho@127.0.0.1:5432/taho_test")
@@ -17,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main  # noqa: E402
-from app.db import Base, engine  # noqa: E402
+from app.db import Base, SessionLocal, engine  # noqa: E402
+from app.models import AuthToken  # noqa: E402
 
 H = 3600_000
 DAY = 24 * H
@@ -65,6 +68,127 @@ def test_register_login_me(client):
     assert client.post("/api/owner/login", json={"email": "shef@firma.bg", "password": "грешна"}).status_code == 401
     assert client.post("/api/owner/register", json={"company": "Друга", "name": "Петър", "email": "shef@firma.bg",
                                                      "password": "12345678"}).status_code == 409
+
+
+@pytest.mark.parametrize(("elapsed", "status"), [
+    (30 * DAY - 1, 200),
+    (30 * DAY, 401),
+    (30 * DAY + 1, 401),
+])
+def test_token_idle_expiry_boundaries(client, monkeypatch, elapsed, status):
+    now = 2_000_000_000_000
+    monkeypatch.setattr(main, "now_ms", lambda: now)
+    token = register(client)
+    last_used = now - elapsed
+    with SessionLocal() as db:
+        auth_token = db.query(AuthToken).filter_by(token_hash=main.fingerprint(token)).one()
+        auth_token.created_at = now - elapsed - DAY
+        auth_token.last_used_at = last_used
+        db.commit()
+
+    assert client.get("/api/me", headers=auth(token)).status_code == status
+    with SessionLocal() as db:
+        auth_token = db.query(AuthToken).filter_by(token_hash=main.fingerprint(token)).one()
+        assert auth_token.last_used_at == (now if status == 200 else last_used)
+
+
+@pytest.mark.parametrize(("age", "status"), [
+    (90 * DAY - 1, 200),
+    (90 * DAY, 401),
+    (90 * DAY + 1, 401),
+])
+def test_token_absolute_expiry_boundaries(client, monkeypatch, age, status):
+    now = 2_000_000_000_000
+    monkeypatch.setattr(main, "now_ms", lambda: now)
+    token = register(client)
+    last_used = now - 2 * H
+    with SessionLocal() as db:
+        auth_token = db.query(AuthToken).filter_by(token_hash=main.fingerprint(token)).one()
+        auth_token.created_at = now - age
+        auth_token.last_used_at = last_used
+        db.commit()
+
+    assert client.get("/api/me", headers=auth(token)).status_code == status
+    with SessionLocal() as db:
+        auth_token = db.query(AuthToken).filter_by(token_hash=main.fingerprint(token)).one()
+        assert auth_token.last_used_at == (now if status == 200 else last_used)
+
+
+def test_active_use_does_not_extend_absolute_token_lifetime(client, monkeypatch):
+    now = 2_000_000_000_000
+    monkeypatch.setattr(main, "now_ms", lambda: now)
+    token = register(client)
+    with SessionLocal() as db:
+        auth_token = db.query(AuthToken).filter_by(token_hash=main.fingerprint(token)).one()
+        auth_token.created_at = now - 90 * DAY
+        auth_token.last_used_at = now
+        db.commit()
+
+    assert client.get("/api/me", headers=auth(token)).status_code == 401
+
+
+def test_valid_token_keeps_hourly_last_used_update(client, monkeypatch):
+    now = 2_000_000_000_000
+    monkeypatch.setattr(main, "now_ms", lambda: now)
+    token = register(client)
+    with SessionLocal() as db:
+        auth_token = db.query(AuthToken).filter_by(token_hash=main.fingerprint(token)).one()
+        auth_token.created_at = now - 2 * H
+        auth_token.last_used_at = now - 3600_001
+        db.commit()
+
+    assert client.get("/api/me", headers=auth(token)).status_code == 200
+    with SessionLocal() as db:
+        auth_token = db.query(AuthToken).filter_by(token_hash=main.fingerprint(token)).one()
+        assert auth_token.last_used_at == now
+
+
+def test_new_login_issues_a_fresh_valid_token(client, monkeypatch):
+    now = 2_000_000_000_000
+    monkeypatch.setattr(main, "now_ms", lambda: now)
+    register(client)
+
+    login = client.post("/api/owner/login", json={"email": "shef@firma.bg", "password": "тайна-парола"})
+    assert login.status_code == 200
+    token = login.json()["token"]
+    assert client.get("/api/me", headers=auth(token)).status_code == 200
+
+
+@pytest.mark.parametrize(("created_at", "last_used_at"), [
+    (None, 2_000_000_000_000),
+    (2_000_000_000_000, None),
+    (1.5, 2_000_000_000_000),
+    (True, 2_000_000_000_000),
+    (-1, 2_000_000_000_000),
+    (2_000_000_000_001, 2_000_000_000_002),
+    (2_000_000_000_001, 2_000_000_000_000),
+])
+def test_invalid_token_timestamps_are_rejected_without_refresh(
+        monkeypatch, created_at, last_used_at):
+    now = 2_000_000_000_000
+    monkeypatch.setattr(main, "now_ms", lambda: now)
+    user = SimpleNamespace(id=1, active=True)
+    token = SimpleNamespace(user_id=1, revoked=False, created_at=created_at, last_used_at=last_used_at)
+
+    class FakeDB:
+        committed = False
+
+        def scalar(self, _query):
+            return token
+
+        def get(self, _model, _user_id):
+            return user
+
+        def commit(self):
+            self.committed = True
+
+    monkeypatch.setattr(main, "fingerprint", lambda _raw_token: "test-fingerprint")
+    db = FakeDB()
+    with pytest.raises(HTTPException) as exc:
+        main.current_user(auth("sample")["Authorization"], db)
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Входът е изтекъл — влез отново"
+    assert not db.committed
 
 
 def test_password_too_short_and_bad_email(client):
