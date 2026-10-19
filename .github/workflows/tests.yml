@@ -74,10 +74,45 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    # Синтетична база само за HTTP проверката на образа; не е production и не е тайна.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: taho
+          POSTGRES_PASSWORD: taho
+          POSTGRES_DB: taho_http
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Образът на сървъра се сглобява
         run: docker build -f server/Dockerfile -t top10eu-server .
       # Проверява самия образ, не checkout-а: без порт, API, база или тайни.
       - name: Картовият планировчик е в образа (planner.html, ui/ и локалните imports)
         run: docker run --rm -i --network none top10eu-server python - /app/web < scripts/check-packaged-web.py
+      - name: HTTP checker-ът пада при невалидна услуга (локални fixtures)
+        run: python scripts/test-check-served-web.py
+      # Същият образ с реалния app.main:app (lifespan създава таблиците в базата),
+      # само на loopback на runner-а; портът не се публикува навън.
+      - name: Сървърът от образа тръгва на 127.0.0.1
+        run: >-
+          docker run -d --name top10eu-http --network host
+          -e DATABASE_URL=postgresql+psycopg://taho:taho@127.0.0.1:5432/taho_http
+          top10eu-server uvicorn app.main:app --host 127.0.0.1 --port 8000
+      - name: Планировчикът през HTTP (статус, MIME и локалните imports)
+        run: python scripts/check-served-web.py http://127.0.0.1:8000 --ready-timeout 60 --request-timeout 10
+      - name: Лог на сървъра при грешка
+        if: failure()
+        run: docker logs --tail 80 top10eu-http 2>&1 || true
+      - name: Спиране на сървъра
+        if: always()
+        run: docker rm -f top10eu-http || true
