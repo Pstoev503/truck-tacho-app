@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMapPlannerController, formatSofiaTime, formatViolation, sampleRoute } from './map-planner.mjs';
+import { createMapPlannerController, formatSofiaTime, formatViolation, parkingWindowOverlay, sampleRoute } from './map-planner.mjs';
 import { buildPlan } from '../engine/plan.js';
 import { indexRoute, pointAtOffset } from '../engine/route-position.js';
 import { createMapPlan } from '../engine/map-plan.js';
@@ -1528,4 +1528,105 @@ test('the evaluator gets the pause offset in metres, not a value rounded through
   await controller.evaluateParking();
   assert.equal(seen[0].maxOffsetM, fromM);
   assert.equal(seen[0].minOffsetM, fromM - 500);
+});
+
+// UI-07: the chosen pre-pause stretch on the map.
+test('no overlay without a chosen pause; the overlay ends exactly at the chosen pause on the same line', async () => {
+  const { controller, restIndex, rest } = await plannedLongRoute();
+  assert.equal(parkingWindowOverlay(controller.getState()), null);
+  controller.selectRestForParking(restIndex, 20);
+  const overlay = parkingWindowOverlay(controller.getState());
+  assert.ok(overlay);
+  const index = indexRoute(controller.getState().points);
+  const start = pointAtOffset(index, rest.fromM - 20_000);
+  assert.deepEqual(overlay.line[0], [start.lat, start.lon]);
+  assert.ok(Math.abs(overlay.rest.lat - rest.fromPoint.lat) < 1e-9 && Math.abs(overlay.rest.lon - rest.fromPoint.lon) < 1e-9,
+    'the pause marker is the plan’s own rest position');
+  assert.deepEqual(overlay.line.at(-1), [overlay.rest.lat, overlay.rest.lon]);
+  assert.match(overlay.caption, /227\.50–247\.50 км/);
+  assert.match(overlay.caption, /Само геометричен преглед/);
+  assert.ok(Object.isFrozen(overlay) && Object.isFrozen(overlay.line));
+});
+
+test('across a bend the overlay keeps the drawn vertex instead of a straight shortcut', async () => {
+  const { controller } = draftController();
+  controller.chooseNoHistory();
+  controller.addPoint({ lat: 0, lon: 0 });
+  controller.addPoint({ lat: 0, lon: 2.1 });
+  controller.addPoint({ lat: 2, lon: 2.1 });
+  controller.setRoadType(0, 'ordinary');
+  controller.setRoadType(1, 'ordinary');
+  await controller.plan();
+  const { result } = controller.getState();
+  const bendM = indexRoute(controller.getState().points).segments[0].endOffsetM;
+  const restIndex = result.events.findIndex(event => event.type === 'rest' && event.fromM > bendM && event.fromM - bendM < 60_000);
+  assert.ok(restIndex >= 0, 'a pause shortly after the bend');
+  controller.selectRestForParking(restIndex, 60);
+  const overlay = parkingWindowOverlay(controller.getState());
+  assert.ok(overlay.line.some(([lat, lon]) => lat === 0 && lon === 2.1), 'the bend vertex is part of the drawn stretch');
+  assert.ok(overlay.line.length >= 3);
+});
+
+test('every invalidation, manual edit, replan, import or clear removes the overlay', async () => {
+  const source = makeController();
+  longRoute(source);
+  const { text: draftText } = source.exportDraft();
+  for (const change of [
+    controller => controller.setBreakStyle('15+30'),
+    controller => controller.dragPoint(1, { lat: 0, lon: 5.9 }),
+    controller => controller.setDeparture({ mode: 'relative', hours: 2, minutes: 0 }),
+    controller => controller.chooseNoHistory(),
+    controller => controller.storageChanged(null),
+    controller => controller.importDraftText(draftText),
+    controller => controller.clear(),
+    controller => controller.plan(),
+    controller => controller.setParkingWindow({ fromKm: 1, toKm: 2, maxLateralM: 500 })
+  ]) {
+    const { controller, restIndex } = await plannedLongRoute();
+    controller.loadInitialHistory(() => null);
+    await controller.plan();
+    controller.selectRestForParking(restIndex, 20);
+    assert.ok(parkingWindowOverlay(controller.getState()));
+    await change(controller);
+    assert.equal(parkingWindowOverlay(controller.getState()), null, String(change));
+  }
+});
+
+test('a late parking evaluation cannot bring the overlay back after an invalidation', async () => {
+  const gate = deferred();
+  const { controller, restIndex } = await plannedLongRoute({
+    evaluateParking: async request => { await gate.promise; return evaluateParkingCandidates(request); }
+  });
+  controller.loadParkingText(parkingText(parkingRecord('p1', 2)));
+  controller.selectRestForParking(restIndex, 20);
+  const pending = controller.evaluateParking();
+  controller.setBreakStyle('15+30');
+  gate.resolve();
+  assert.deepEqual(await pending, { accepted: false, stale: true });
+  assert.equal(parkingWindowOverlay(controller.getState()), null);
+  assert.equal(controller.getState().parking.items, null);
+});
+
+test('evaluating the parking list keeps the same window overlay and the plan unchanged', async () => {
+  const { controller, restIndex } = await plannedLongRoute();
+  controller.loadParkingText(parkingText(parkingRecord('p1', 2.1)));
+  controller.selectRestForParking(restIndex, 20);
+  const before = controller.getState();
+  const overlayBefore = parkingWindowOverlay(before);
+  await controller.evaluateParking();
+  const after = controller.getState();
+  assert.deepEqual(parkingWindowOverlay(after), overlayBefore);
+  assert.equal(after.result, before.result);
+  assert.equal(after.inputRevision, before.inputRevision);
+  assert.equal(after.parking.mode, 'evaluated');
+});
+
+test('an unusable line or window gives no overlay instead of stale or invented coordinates', () => {
+  const base = { points: [{ lat: 0, lon: 0 }, { lat: 0, lon: 1 }], parking: { restWindow: { minOffsetM: 0, maxOffsetM: 50_000, label: 'Пауза' } } };
+  assert.ok(parkingWindowOverlay(base));
+  assert.equal(parkingWindowOverlay({ ...base, points: [{ lat: 0, lon: 0 }] }), null);
+  assert.equal(parkingWindowOverlay({ ...base, parking: { restWindow: { minOffsetM: 0, maxOffsetM: 999_999 } } }), null);
+  assert.equal(parkingWindowOverlay({ ...base, points: [{ lat: 0, lon: 179 }, { lat: 0, lon: -179 }] }), null);
+  assert.equal(parkingWindowOverlay({ ...base, parking: { restWindow: null } }), null);
+  assert.equal(parkingWindowOverlay(undefined), null);
 });
