@@ -92,15 +92,15 @@ for(const stage of ['createRequest','evaluate','plan']){
    const baseCreate=async ({cycle,routeRevision,attempt,inputRevision,requestId,plan})=>({contractVersion:'0.1',evaluationCycle:cycle,routeRevision,attempt,inputRevision,requestId,segments:clone(plan.segments)});
    const createRequest=async args=>{
      const request=await baseCreate(args);
-     if(stage==='createRequest')return (++calls===1?old.promise:fresh.promise);
+     if(stage==='createRequest'){calls++;return calls===1?old.promise:calls===2?fresh.promise:request;}
      return request;
    };
    const evaluate=async request=>{
-     if(stage==='evaluate')return (++calls===1?old.promise:fresh.promise);
+     if(stage==='evaluate'){calls++;return calls===1?old.promise:calls===2?fresh.promise:echo(request);}
      return echo(request);
    };
    const plan=async ({previousPlan})=>{
-     if(stage==='plan')return (++calls===1?old.promise:fresh.promise);
+     if(stage==='plan'){calls++;return calls===1?old.promise:calls===2?fresh.promise:{...previousPlan,etaMs:previousPlan.etaMs+120000};}
      return {...previousPlan,etaMs:previousPlan.etaMs+120000};
    };
    const x=setup({createRequest,evaluate,plan});
