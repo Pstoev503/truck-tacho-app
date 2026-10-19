@@ -876,3 +876,189 @@ test('loading and evaluating parkings use no storage, network or timers', async 
     }
   }
 });
+
+// UI-04: break during driving, 45 min at once or 15 + 30 min (both already
+// supported by buildPlan and validated by createMapPlan).
+const minutes = ms => Math.round(ms / 60_000);
+const restSummary = result => result.engineResult.events
+  .filter(event => event.type === 'rest')
+  .map(event => [minutes(event.end - event.start), event.label]);
+const longRoute = controller => {
+  controller.addPoint({ lat: 0, lon: 0 });
+  controller.addPoint({ lat: 0, lon: 6 });
+  controller.setRoadType(0, 'ordinary');
+};
+
+test('break style defaults to 45 and is sent as choices.breakStyle', async () => {
+  const requests = [];
+  const controller = readyController({ adapter: async request => { requests.push(request); return echoed(request); } });
+  assert.equal(controller.getState().breakStyle, '45');
+  await controller.plan();
+  assert.equal(requests[0].choices.breakStyle, '45');
+  controller.setBreakStyle('15+30');
+  assert.equal(controller.getState().breakStyle, '15+30');
+  await controller.plan();
+  assert.equal(requests[1].choices.breakStyle, '15+30');
+  assert.deepEqual(requests[1].choices.bySection, requests[0].choices.bySection,
+    'daily rest and 10 h choices are separate and unchanged');
+});
+
+test('break style setter accepts only the exact strings 45 and 15+30', () => {
+  const controller = readyController();
+  const before = controller.getState();
+  for (const bad of [45, '45 ', '15 + 30', '15+30 ', '30', '', null, undefined, {}, ['45'], true]) {
+    assert.throws(() => controller.setBreakStyle(bad), TypeError, String(bad));
+  }
+  const after = controller.getState();
+  assert.equal(after.breakStyle, '45');
+  assert.equal(after.inputRevision, before.inputRevision);
+  assert.equal(after.routeRevision, before.routeRevision);
+});
+
+test('changing the break style is an input revision only; the same value changes nothing', () => {
+  const controller = readyController();
+  const before = controller.getState();
+  controller.setBreakStyle('15+30');
+  const changed = controller.getState();
+  assert.equal(changed.routeRevision, before.routeRevision);
+  assert.equal(changed.inputRevision, before.inputRevision + 1);
+  controller.setBreakStyle('15+30');
+  assert.equal(controller.getState().inputRevision, changed.inputRevision);
+  controller.setBreakStyle('45');
+  assert.equal(controller.getState().inputRevision, changed.inputRevision + 1);
+  assert.equal(controller.getState().routeRevision, before.routeRevision);
+});
+
+test('a shown plan is removed when the break style changes and nothing is replanned automatically', async () => {
+  let calls = 0;
+  const controller = readyController({ adapter: async request => { calls++; return echoed(request, { state: 'estimated', events: [] }); } });
+  await controller.plan();
+  assert.equal(controller.getState().result.state, 'estimated');
+  controller.setBreakStyle('15+30');
+  assert.equal(controller.getState().result, null);
+  assert.equal(controller.getState().error, null);
+  assert.equal(calls, 1, 'no automatic replan');
+});
+
+test('a pending plan with the old break style is rejected when it finishes late', async () => {
+  const gate = deferred();
+  const controller = readyController({ adapter: async request => { await gate.promise; return echoed(request); } });
+  const pending = controller.plan();
+  controller.setBreakStyle('15+30');
+  gate.resolve();
+  const outcome = await pending;
+  assert.equal(outcome.accepted, false);
+  assert.equal(outcome.stale, true);
+  assert.equal(controller.getState().result, null);
+});
+
+test('a new plan does not accept a result echoing the old input revision', async () => {
+  let oldRequest = null;
+  const controller = readyController({
+    adapter: async request => {
+      if (!oldRequest) { oldRequest = request; return echoed(request); }
+      return echoed({ ...request, inputRevision: oldRequest.inputRevision });
+    }
+  });
+  await controller.plan();
+  controller.setBreakStyle('15+30');
+  const outcome = await controller.plan();
+  assert.equal(outcome.accepted, false);
+  assert.equal(controller.getState().result, null);
+  assert.match(controller.getState().error, /актуален план/);
+});
+
+test('changing the break style drops parking results but keeps route, road types, history, choices and the parking list', async () => {
+  const activities = JSON.stringify([{ type: 'rest', start: fixedNow - 12 * 3_600_000, end: fixedNow - 3_600_000 }]);
+  const controller = createMapPlannerController({ now: () => fixedNow });
+  controller.loadInitialHistory(key => (key === 'th_activities' ? activities : null));
+  parkingRoute(controller);
+  controller.setRoadType(0, 'motorway');
+  controller.setChoice('section-1', { useExtension: true, dailyRest: 'reduced' });
+  controller.setDeparture({ mode: 'relative', hours: 1, minutes: 30 });
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.5)), 'list.json');
+  await controller.evaluateParking();
+  assert.equal(controller.getState().parking.mode, 'evaluated');
+  const before = controller.getState();
+  controller.setBreakStyle('15+30');
+  const after = controller.getState();
+  assert.equal(after.parking.result, null);
+  assert.equal(after.parking.items, null);
+  assert.equal(after.parking.mode, 'loaded');
+  assert.equal(after.parking.count, 1);
+  assert.equal(after.parking.fileName, 'list.json');
+  assert.deepEqual(after.points, before.points);
+  assert.deepEqual(after.roadTypes, before.roadTypes);
+  assert.deepEqual(after.choices, before.choices);
+  assert.deepEqual(after.departure, before.departure);
+  assert.deepEqual(after.history, before.history);
+});
+
+test('real planner: 45 gives one 45 min pause, 15+30 gives 15 at 4 h and 30 at 4 h 30 min', async () => {
+  const planWith = async style => {
+    const controller = makeController();
+    longRoute(controller);
+    if (style !== '45') controller.setBreakStyle(style);
+    await controller.plan();
+    const { result } = controller.getState();
+    assert.equal(result.state, 'estimated', style);
+    return result;
+  };
+  const full = await planWith('45');
+  const split = await planWith('15+30');
+  assert.deepEqual(restSummary(full), [[45, 'Пауза 45 мин'], [660, 'Редовна дневна почивка 11 ч']]);
+  assert.deepEqual(restSummary(split), [
+    [15, 'Пауза 15 мин'], [30, 'Пауза 30 мин (15 + 30)'],
+    [15, 'Пауза 15 мин'], [660, 'Редовна дневна почивка 11 ч']
+  ]);
+  const [firstDrive, firstPause] = split.engineResult.events;
+  assert.equal(minutes(firstDrive.end - firstDrive.start), 240);
+  assert.equal(firstPause.start, firstDrive.end);
+  const secondPause = split.engineResult.events[3];
+  assert.equal(minutes(secondPause.start - fixedNow), 285, '4 h 30 min driving plus the 15 min pause');
+  // Map rest events come from the actual result, one per engine rest, on the route.
+  for (const result of [full, split]) {
+    const mapRests = result.events.filter(event => event.type === 'rest');
+    assert.equal(mapRests.length, restSummary(result).length);
+    assert.ok(mapRests.every(event => event.fromPoint && Number.isFinite(event.fromPoint.lat)));
+  }
+  assert.notEqual(split.arrivalUtcMs, full.arrivalUtcMs);
+});
+
+test('real planner: a 15 min part already in the history is not taken again', async () => {
+  const activities = JSON.stringify([
+    { type: 'rest', start: fixedNow - 13 * 3_600_000, end: fixedNow - 3 * 3_600_000 },
+    { type: 'drive', start: fixedNow - 3 * 3_600_000, end: fixedNow - 75 * 60_000 },
+    { type: 'rest', start: fixedNow - 75 * 60_000, end: fixedNow - 60 * 60_000 },
+    { type: 'drive', start: fixedNow - 60 * 60_000, end: fixedNow }
+  ]);
+  const controller = createMapPlannerController({ now: () => fixedNow });
+  controller.loadInitialHistory(key => (key === 'th_activities' ? activities : null));
+  longRoute(controller);
+  controller.setBreakStyle('15+30');
+  await controller.plan();
+  const { result } = controller.getState();
+  assert.equal(result.state, 'estimated');
+  const [drive, pause] = result.engineResult.events;
+  assert.equal(drive.type, 'drive');
+  assert.equal(minutes(drive.end - drive.start), 105, '2 h 45 min recorded + 1 h 45 min planned = 4 h 30 min');
+  assert.equal(pause.label, 'Пауза 30 мин (15 + 30)');
+  assert.equal(minutes(pause.end - pause.start), 30);
+});
+
+test('switching back to 45 and planning again restores the 45 min schedule', async () => {
+  const controller = makeController();
+  longRoute(controller);
+  await controller.plan();
+  const first = controller.getState().result;
+  controller.setBreakStyle('15+30');
+  await controller.plan();
+  assert.ok(restSummary(controller.getState().result).some(([length]) => length === 15));
+  controller.setBreakStyle('45');
+  assert.equal(controller.getState().result, null);
+  await controller.plan();
+  const again = controller.getState().result;
+  assert.deepEqual(restSummary(again), restSummary(first));
+  assert.equal(again.arrivalUtcMs, first.arrivalUtcMs);
+  assert.notEqual(again.requestId, first.requestId);
+});
