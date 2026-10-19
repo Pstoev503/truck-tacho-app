@@ -5,9 +5,10 @@ WORKDIR /app
 COPY server/requirements.txt /app/server/requirements.txt
 RUN pip install --no-cache-dir -r /app/server/requirements.txt
 COPY server/app /app/server/app
-COPY index.html boss.html manifest.json sw.js /app/web/
+COPY index.html boss.html manifest.json sw.js planner.html /app/web/
 COPY engine /app/web/engine
 COPY vendor /app/web/vendor
+COPY ui /app/web/ui
 # X-Forwarded-For се вярва само от посочените адреси (в docker compose — от Caddy)
 ENV WEB_ROOT=/app/web PYTHONUNBUFFERED=1 FORWARDED_ALLOW_IPS=127.0.0.1
 WORKDIR /app/server
