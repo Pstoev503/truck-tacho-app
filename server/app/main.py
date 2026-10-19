@@ -79,6 +79,8 @@ async def validation_error(_request: Request, exc: RequestValidationError):
 
 login_throttle = Throttle(max_attempts=8, window_s=15 * 60)
 join_throttle = Throttle(max_attempts=10, window_s=15 * 60)
+join_aggregate_throttle = Throttle(max_attempts=100, window_s=15 * 60)
+join_lock = threading.Lock()
 route_options_throttle = Throttle(max_attempts=10, window_s=60)
 route_options_lock = threading.Lock()
 
@@ -336,13 +338,19 @@ class JoinIn(BaseModel):
 
 @app.post("/api/join")
 def join(body: JoinIn, request: Request, db: Session = Depends(get_db)):
-    key = client_key(request)
-    if join_throttle.blocked(key):
-        raise HTTPException(429, "Твърде много опити — изчакай 15 минути")
-    t = now_ms()
-    inv = db.scalar(select(Invite).where(Invite.code_hash == fingerprint(normalize_code(body.code))))
-    if not inv or inv.used_at is not None or inv.expires_at < t:
+    normalized_code = normalize_code(body.code)
+    key = client_key(request, fingerprint(normalized_code))
+    aggregate_key = client_key(request)
+    with join_lock:
+        code_blocked = join_throttle.blocked(key)
+        aggregate_blocked = join_aggregate_throttle.blocked(aggregate_key)
+        if code_blocked or aggregate_blocked:
+            raise HTTPException(429, "Твърде много опити — изчакай 15 минути")
         join_throttle.fail(key)
+        join_aggregate_throttle.fail(aggregate_key)
+    t = now_ms()
+    inv = db.scalar(select(Invite).where(Invite.code_hash == fingerprint(normalized_code)))
+    if not inv or inv.used_at is not None or inv.expires_at < t:
         raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
     d = db.get(User, inv.user_id)
     if not d or not d.active:
