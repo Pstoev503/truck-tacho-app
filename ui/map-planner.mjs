@@ -9,6 +9,7 @@ import {
 } from './planner-parking.mjs';
 
 const ROAD_TYPES = new Set(['motorway', 'ordinary']);
+const BREAK_STYLES = new Set(['45', '15+30']);
 const EARTH_RADIUS_M = 6_371_000;
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
@@ -30,6 +31,7 @@ export function createMapPlannerController({
   let result = null;
   let error = null;
   let departure = { mode: 'now', hours: 0, minutes: 0 };
+  let breakStyle = '45';
   let history = { mode: 'unselected', snapshot: null, summary: null, error: null };
   // The imported list survives route edits; any evaluation result does not.
   const parking = {
@@ -46,6 +48,7 @@ export function createMapPlannerController({
     routeRevision,
     inputRevision,
     departure: { ...departure },
+    breakStyle,
     history: clone(history),
     result,
     error,
@@ -144,7 +147,7 @@ export function createMapPlannerController({
           ? clone(history.snapshot)
           : { activities: [], lastWeeklyRestEnd: null, source: 'none' },
         choices: {
-          breakStyle: '45',
+          breakStyle,
           multiManning: false,
           bySection: sections.map(section => ({
             sectionId: section.id,
@@ -374,6 +377,15 @@ export function createMapPlannerController({
         useExtension: nextChoice.useExtension,
         dailyRest: nextChoice.dailyRest
       };
+      invalidate(false);
+    },
+    // Only the break during driving; daily rest and the 10 h request are per section.
+    setBreakStyle(nextBreakStyle) {
+      if (typeof nextBreakStyle !== 'string' || !BREAK_STYLES.has(nextBreakStyle)) {
+        throw new TypeError('Избери пауза 45 мин или 15 + 30 мин.');
+      }
+      if (nextBreakStyle === breakStyle) return;
+      breakStyle = nextBreakStyle;
       invalidate(false);
     },
     setDeparture(nextDeparture) {
@@ -621,6 +633,7 @@ function renderPlanner(state, map, layers, controller) {
   renderParking(state.parking);
 
   $('relative-inputs').hidden = $('departure-mode').value !== 'relative';
+  $('break-style').value = state.breakStyle;
   const historyStatus = $('history-status');
   if (state.history.mode === 'loaded') {
     const summary = state.history.summary;
@@ -738,6 +751,8 @@ if (typeof document !== 'undefined') {
         minutes: Number(document.getElementById('departure-minutes').value)
       }));
   }
+  document.getElementById('break-style').addEventListener('change', event =>
+    controller.setBreakStyle(event.target.value));
   document.getElementById('plan').addEventListener('click', () => controller.plan());
   const loadHistory = () => controller.loadInitialHistory(key => localStorage.getItem(key));
   document.getElementById('history-use').addEventListener('click', loadHistory);

@@ -52,6 +52,12 @@
           <input id="departure-minutes" type="number" min="0" max="59" value="0"> минути</label>
       </div>
       <p class="notice">Потегляне сега или след избран интервал. Часовете са по българско време.</p>
+      <label for="break-style">Пауза по време на управление</label>
+      <select id="break-style">
+        <option value="45">45 мин наведнъж</option>
+        <option value="15+30">15 + 30 мин</option>
+      </select>
+      <p class="notice">Отнася се само за паузата при непрекъснато управление. Не променя дневната почивка (9 или 11 ч) и заявката за 10 ч управление по участъци. Паузите се разпределят от планирането; графикът остава ориентировъчен.</p>
       <button id="plan" class="primary" type="button">Планирай</button>
       <p id="message" class="message" aria-live="polite"></p>
     </section>
