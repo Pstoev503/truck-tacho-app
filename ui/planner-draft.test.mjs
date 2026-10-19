@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DRAFT_FORMAT, DRAFT_VERSION, DraftFileError, MAX_DRAFT_FILE_BYTES, MAX_DRAFT_POINTS,
+  DRAFT_FORMAT, DRAFT_VERSION, DRAFT_VERSION_ABSOLUTE, DraftFileError, MAX_DRAFT_FILE_BYTES, MAX_DRAFT_POINTS,
   createDraft, draftFileName, parseDraftText, readDraftFile, validateDraft
 } from './planner-draft.mjs';
 
@@ -57,7 +57,10 @@ test('an unfinished draft with 0 or 1 point and unselected road types is accepte
 
 test('format, version and unknown or missing fields are refused', () => {
   assert.equal(codeOf(withChange(d => { d.format = 'other'; })), 'UNKNOWN_FORMAT');
-  assert.equal(codeOf(withChange(d => { d.version = 2; })), 'UNSUPPORTED_VERSION');
+  assert.equal(codeOf(withChange(d => { d.version = 3; })), 'UNSUPPORTED_VERSION');
+  assert.equal(codeOf(withChange(d => { d.version = 0; })), 'UNSUPPORTED_VERSION');
+  // Version 2 exists since UI-08, but only for a departure at a date and time.
+  assert.equal(codeOf(withChange(d => { d.version = 2; })), 'VERSION_MISMATCH');
   assert.equal(codeOf(withChange(d => { d.version = '1'; })), 'UNSUPPORTED_VERSION');
   for (const extra of ['activities', 'lastWeeklyRestEnd', 'token', 'parkingCandidates', 'result', 'requestId', 'routeRevision']) {
     assert.equal(codeOf(withChange(d => { d[extra] = 'x'; })), 'UNKNOWN_FIELD', extra);
@@ -143,4 +146,54 @@ test('export is refused for a state that is not a valid draft', () => {
   assert.throws(() => createDraft({ ...base(), breakStyle: '30' }, T), DraftFileError);
   assert.throws(() => createDraft(base(), NaN), DraftFileError);
   assert.equal(draftFileName(T), 'top10eu-podgotovka-20261019-0800Z.json');
+});
+
+// UI-08: version 2 only for a departure at a local Sofia date and time.
+const absolute = (extra = {}) => ({ mode: 'absolute', date: '2026-11-02', time: '08:00', timeZone: 'Europe/Sofia', fold: null, ...extra });
+const v2 = change => { const draft = { ...base(), version: DRAFT_VERSION_ABSOLUTE, departure: absolute() }; change?.(draft); return draft; };
+
+test('now and relative drafts stay version 1 with the same 8 fields', () => {
+  for (const departure of [{ mode: 'now', hours: 0, minutes: 0 }, { mode: 'relative', hours: 2, minutes: 30 }]) {
+    const parsed = JSON.parse(createDraft({ ...base(), departure }, T));
+    assert.equal(parsed.version, 1);
+    assert.deepEqual(Object.keys(parsed), ['format', 'version', 'exportedAtUtcMs', 'points', 'roadTypes', 'choices', 'departure', 'breakStyle']);
+    assert.deepEqual(Object.keys(parsed.departure), ['mode', 'hours', 'minutes']);
+  }
+});
+
+test('a date-and-time draft round-trips as version 2 without a computed UTC or other extras', () => {
+  for (const departure of [absolute(), absolute({ date: '2026-10-25', time: '03:30', fold: 'later' })]) {
+    const text = createDraft({ ...base(), departure }, T);
+    const parsed = JSON.parse(text);
+    assert.equal(parsed.version, DRAFT_VERSION_ABSOLUTE);
+    assert.deepEqual(Object.keys(parsed), ['format', 'version', 'exportedAtUtcMs', 'points', 'roadTypes', 'choices', 'departure', 'breakStyle']);
+    assert.deepEqual(Object.keys(parsed.departure), ['mode', 'date', 'time', 'timeZone', 'fold']);
+    assert.ok(!/utc|Utc|UTC/.test(JSON.stringify(parsed.departure)), 'no computed UTC instant');
+    assert.deepEqual(parseDraftText(text).departure, departure, 'time zone and fold unchanged');
+  }
+});
+
+test('version 2 departure keys, time zone, fold and calendar are strict', () => {
+  assert.equal(codeOf(v2()), 'ok');
+  assert.equal(codeOf(v2(d => { d.departure.utcMs = 1; })), 'UNKNOWN_FIELD');
+  assert.equal(codeOf(v2(d => { delete d.departure.fold; })), 'MISSING_FIELD');
+  assert.equal(codeOf(v2(d => { d.departure.timeZone = 'Europe/Berlin'; })), 'INVALID_DEPARTURE');
+  assert.equal(codeOf(v2(d => { d.departure.fold = 'first'; })), 'INVALID_DEPARTURE');
+  assert.equal(codeOf(v2(d => { d.departure.date = '2026-02-30'; })), 'INVALID_DEPARTURE');
+  assert.equal(codeOf(v2(d => { d.departure.time = 830; })), 'INVALID_DEPARTURE');
+  assert.equal(codeOf(v2(d => { d.departure.date = '2026-03-29'; d.departure.time = '03:30'; })), 'INVALID_DEPARTURE', 'spring gap');
+  assert.equal(codeOf(v2(d => { d.departure.date = '2026-10-25'; d.departure.time = '03:30'; })), 'INVALID_DEPARTURE', 'fold without choice');
+  assert.equal(codeOf(v2(d => { d.departure.fold = 'earlier'; })), 'INVALID_DEPARTURE', 'fold on an unambiguous time');
+});
+
+test('version 1 refuses a date-and-time departure and version 2 accepts only it', () => {
+  assert.equal(codeOf({ ...base(), departure: absolute() }), 'VERSION_MISMATCH');
+  assert.equal(codeOf(v2(d => { d.departure = { mode: 'relative', hours: 1, minutes: 0 }; })), 'VERSION_MISMATCH');
+  assert.equal(codeOf(v2(d => { d.departure = { mode: 'now', hours: 0, minutes: 0 }; })), 'VERSION_MISMATCH');
+  assert.equal(codeOf(v2(d => { d.version = 3; })), 'UNSUPPORTED_VERSION');
+});
+
+test('a past date can be loaded from a version 2 file for correction', () => {
+  const loaded = validateDraft(v2(d => { d.departure.date = '2001-01-01'; }));
+  assert.equal(loaded.departure.date, '2001-01-01');
 });
