@@ -13,7 +13,6 @@ export function createTrafficCycle({ evaluate, plan, createRequest, validate = v
   const snapshot=()=>active&&({cycle:active.cycle,routeRevision:active.routeRevision,attempt:active.attempt,status:active.status,etaMs:active.etaMs});
   const cancel=()=>{generation++;if(active)active.status='cancelled';active=null;return {status:'cancelled'};};
   const run=async ({cycle,routeRevision,initialPlan,requestIds,inputRevisions}={})=>{
-    const finish=(status,extra={})=>{if(active&&active.status==='running'){active.status=status;}return {status,...extra};};
     if(typeof cycle!=='string'||!cycle||typeof routeRevision!=='string'||!routeRevision||!Array.isArray(requestIds)||requestIds.length<3||new Set(requestIds.slice(0,3)).size!==3||!Array.isArray(inputRevisions)||inputRevisions.length<3||!initialPlan||!Number.isFinite(initialPlan.etaMs))return {status:'invalid_input',attempts:0};
     const key=JSON.stringify([routeRevision,cycle]);
     if(usedCycles.has(key))return {status:'cycle_reused',attempts:0};
@@ -21,6 +20,11 @@ export function createTrafficCycle({ evaluate, plan, createRequest, validate = v
     const token=++generation;
     const state={cycle,routeRevision,attempt:0,status:'running',etaMs:initialPlan.etaMs};active=state;
     const current=()=>token===generation&&active===state;
+    const finish=(status,extra={})=>{
+      if(!current())return {status:'cancelled',attempts:extra.attempts??state.attempt};
+      if(state.status==='running')state.status=status;
+      return {status,...extra};
+    };
     let previous=initialPlan, lastPassability=null, lastAccepted=null;
     for(let attempt=1;attempt<=3;attempt++){
       if(!current())return {status:'cancelled',attempts:attempt-1};
@@ -40,7 +44,10 @@ export function createTrafficCycle({ evaluate, plan, createRequest, validate = v
         if(response.segments?.some(s=>s.passability==='unknown'||s.vehicleApplicability!=='covered'||s.selected?.status!=='fresh'))return finish('limited',{attempts:attempt,reason:'unknown_or_uncovered'});
         next=await plan({request,response,previousPlan:previous,attempt});
         if(!current())return {status:'cancelled',attempts:attempt-1};
-      }catch(error){return finish('callback_error',{attempts:attempt,stage:!request?'createRequest':!response?'evaluate':'plan',message:String(error?.message??error)});}
+      }catch(error){
+        if(!current())return {status:'cancelled',attempts:attempt-1};
+        return finish('callback_error',{attempts:attempt,stage:!request?'createRequest':!response?'evaluate':'plan',message:String(error?.message??error)});
+      }
       if(!next||!Number.isFinite(next.etaMs)||!Array.isArray(next.segments))return finish('invalid_plan',{attempts:attempt});
       const passability=response.segments.map(s=>s.passability);
       const deltaSeconds=Math.abs(next.etaMs-previous.etaMs)/1000;
