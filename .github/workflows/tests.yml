@@ -78,3 +78,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Образът на сървъра се сглобява
         run: docker build -f server/Dockerfile -t top10eu-server .
+      # Проверява самия образ, не checkout-а: без порт, API, база или тайни.
+      - name: Картовият планировчик е в образа (planner.html, ui/ и локалните imports)
+        run: docker run --rm -i --network none top10eu-server python - /app/web < scripts/check-packaged-web.py
