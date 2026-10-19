@@ -4,9 +4,13 @@
  * @param {{evaluatedAt:number,sources:Array<object>}} input
  * @returns {{status:string,reason:string,evaluatedAt:number|null,sources:Array<object>,counts:object}}
  */
-export function evaluateTrafficSourceHealth({evaluatedAt,sources} = {}) {
+export function evaluateTrafficSourceHealth(input) {
   const integer = value => Number.isSafeInteger(value) && value >= 0;
+  const envelopeValid = input !== null && typeof input === 'object' && !Array.isArray(input);
+  const evaluatedAt = envelopeValid ? input.evaluatedAt : undefined;
+  const sources = envelopeValid ? input.sources : undefined;
   const invalid = reason => ({status:'invalid-input',reason,evaluatedAt:integer(evaluatedAt)?evaluatedAt:null,sources:[],counts:{total:0,usable:0,invalid:0}});
+  if (!envelopeValid) return invalid('INVALID_ENVELOPE');
   if (!integer(evaluatedAt)) return invalid('INVALID_EVALUATED_AT');
   if (!Array.isArray(sources) || sources.length > 1000) return invalid('INVALID_SOURCES');
   const ids = new Map();
@@ -35,7 +39,7 @@ export function evaluateTrafficSourceHealth({evaluatedAt,sources} = {}) {
     if(errors.length)return {index,sourceId:id,transportState:'invalid',permissionState:['declared-allowed','unknown','denied'].includes(permission)?permission:'unknown',usableForEvaluation:false,degraded:true,errors,warnings};
     const transportState=success===null?'no-data':evaluatedAt-success>=maxAge?'stale':'fresh';
     if(transportState==='fresh'&&evaluatedAt-success>=interval)warnings.push('LATE_UPDATE');
-    if(failures>0 && attempt!==null && (success===null || attempt>=success))warnings.push('RECENT_FAILURES');
+    if(failures>0 && (attempt===null || success===null || attempt>=success))warnings.push('RECENT_FAILURES');
     if(permission==='unknown')warnings.push('PERMISSION_UNKNOWN');
     if(permission==='denied')warnings.push('PERMISSION_DENIED');
     if(permission==='declared-allowed'&&license===null)warnings.push('MISSING_LICENSE_REF');
