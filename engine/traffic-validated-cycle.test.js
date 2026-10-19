@@ -52,7 +52,7 @@ test('context invalid clock fail-closed',async()=>{const x=setup({context:({sour
 test('context rejected Promise consumed and rejected',async()=>{const x=setup({context:()=>Promise.reject(Error('SECRET_PROMISE'))});const r=await x.ctrl.run(args());assert.equal(r.status,'invalid_exchange');assert.deepEqual(r.errors,[{code:'EVALUATION_CONTEXT_ASYNC',path:'options.getEvaluationContext'}])});
 test('context resolved Promise rejected synchronously',async()=>{const x=setup({context:()=>Promise.resolve({evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sources()})});assert.equal((await x.ctrl.run(args())).status,'invalid_exchange')});
 test('activeRequest override cannot bypass lineage',async()=>{const x=setup({context:({sourceList})=>({activeRequest:{requestId:'fake'},evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sourceList})});assert.equal((await x.ctrl.run(args())).status,'unstable_estimate')});
-test('context receives copies not engine-owned references',async()=>{const x=setup({context:({request,response,sourceList})=>{request.requestId='fake';response.requestId='fake';return {evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sourceList}}});assert.equal((await x.ctrl.run(args())).status,'unstable_estimate')});
+test('context receives read-only copies not engine-owned references',async()=>{const x=setup({context:({request,response,sourceList})=>{assert.throws(()=>{request.requestId='fake'},TypeError);assert.throws(()=>{response.requestId='fake'},TypeError);return {evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sourceList}}});assert.equal((await x.ctrl.run(args())).status,'unstable_estimate')});
 test('frozen callback originals accepted without mutation',async()=>{const x=setup({context:({request,response,sourceList})=>{Object.freeze(request);Object.freeze(response);return Object.freeze({evaluatedAt:clock,maxExchangeAgeMs:60000,sources:Object.freeze(sourceList)})}});assert.equal((await x.ctrl.run(args())).status,'unstable_estimate')});
 test('reuse cycle refused',async()=>{const x=setup();await x.ctrl.run(args());assert.equal((await x.ctrl.run(args())).status,'cycle_reused');assert.equal(x.stats.context,3)});
 test('different cycle resets budget',async()=>{const x=setup();await x.ctrl.run(args());const r=await x.ctrl.run(args('cycle-2'));assert.equal(r.status,'unstable_estimate');assert.equal(x.stats.plan,6)});
@@ -63,3 +63,70 @@ test('callback requirements reject missing context',()=>assert.throws(()=>create
 test('cannot install validate override',async()=>{const x=setup();const r=await x.ctrl.run(args());assert.equal(r.status,'unstable_estimate');assert.equal(typeof x.ctrl.validate,'undefined')});
 test('no ambient clock',async()=>{const now=Date.now;Date.now=()=>{throw Error('ambient clock')};try{const x=setup({delta:30000});assert.equal((await x.ctrl.run(args())).status,'converged')}finally{Date.now=now}});
 test('snapshot exposes accepted cycle fields',async()=>{const x=setup({delta:30000});await x.ctrl.run(args());assert.deepEqual([x.ctrl.snapshot().cycle,x.ctrl.snapshot().status],['cycle-1','converged'])});
+
+test('throwing then accessor is a generic invalid exchange without exception leakage',async()=>{
+ const x=setup({context:()=>Object.defineProperty({},'then',{get(){throw Error('SYNTHETIC_SECRET')}})});
+ const result=await x.ctrl.run(args());
+ assert.equal(result.status,'invalid_exchange');
+ assert.deepEqual(result.errors,[{code:'EVALUATION_CONTEXT_ERROR',path:'options.getEvaluationContext'}]);
+ assert.equal(JSON.stringify(result).includes('SYNTHETIC_SECRET'),false);
+ assert.equal(x.stats.plan,0);
+});
+test('throwing source context accessor never reaches cycle callback_error',async()=>{
+ const x=setup({context:()=>Object.defineProperty({evaluatedAt:clock,maxExchangeAgeMs:60000},'sources',{get(){throw Error('SYNTHETIC_SOURCE_SECRET')}})});
+ const result=await x.ctrl.run(args());
+ assert.equal(result.status,'invalid_exchange');assert.equal(result.errors[0].code,'EVALUATION_CONTEXT_ERROR');
+ assert.equal(JSON.stringify(result).includes('SYNTHETIC_SOURCE_SECRET'),false);assert.equal(x.stats.plan,0);
+});
+test('native rejected Promise with poisoned then is consumed through intrinsic',async()=>{
+ const x=setup({context:()=>{const p=Promise.reject(Error('SYNTHETIC_PROMISE_SECRET'));Object.defineProperty(p,'then',{get(){throw Error('POISONED_THEN')}});return p;}});
+ const result=await x.ctrl.run(args());
+ assert.equal(result.status,'invalid_exchange');assert.equal(result.errors[0].code,'EVALUATION_CONTEXT_ASYNC');assert.equal(x.stats.plan,0);
+ await new Promise(resolve=>setImmediate(resolve));
+});
+test('function thenable rejection is consumed and never accepted as context',async()=>{
+ const x=setup({context:()=>{const fn=()=>{};fn.then=(_resolve,reject)=>reject(Error('SYNTHETIC_THENABLE_SECRET'));return fn;}});
+ const result=await x.ctrl.run(args());
+ assert.equal(result.status,'invalid_exchange');assert.equal(result.errors[0].code,'EVALUATION_CONTEXT_ASYNC');assert.equal(x.stats.plan,0);
+ await new Promise(resolve=>setImmediate(resolve));
+});
+test('nested request and response copies are deeply frozen without freezing sources',async()=>{
+ const x=setup({delta:30000,context:({request,response,sourceList})=>{
+  for(const value of [request,response,request.segments,response.segments,request.segments[0],response.segments[0],response.segments[0].selected]){
+   assert.equal(Object.isFrozen(value),true);
+  }
+  assert.throws(()=>request.segments.push({}),TypeError);
+  assert.throws(()=>{response.segments[0].passability='closed'},TypeError);
+  assert.equal(Object.isFrozen(sourceList),false);assert.equal(Object.isFrozen(sourceList[0]),false);
+  return{evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sourceList};
+ }});
+ assert.equal((await x.ctrl.run(args())).status,'converged');
+ assert.equal(Object.isFrozen(templateRequest),false);assert.equal(Object.isFrozen(templateResponse),false);
+});
+test('context cancellation prevents any actual planner call',async()=>{
+ const x=setup({delta:30000,context:()=>{x.ctrl.cancel();return{evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sources()};}});
+ const result=await x.ctrl.run(args());assert.equal(result.status,'cancelled');assert.equal(x.stats.plan,0);assert.equal(x.ctrl.snapshot(),null);
+});
+test('context supersession never invokes old planner or overwrites new snapshot',async()=>{
+ let newer;
+ const x=setup({delta:30000,context:({stats})=>{if(stats.context===1)newer=x.ctrl.run(args('cycle-2'));return{evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sources()};}});
+ const old=await x.ctrl.run(args());assert.equal(old.status,'cancelled');
+ const result=await newer;assert.equal(result.status,'converged');assert.equal(x.stats.plan,1);assert.equal(x.ctrl.snapshot().cycle,'cycle-2');
+});
+test('invalid nested run preserves the valid currently running cycle',async()=>{
+ let nested;
+ const x=setup({delta:30000,context:()=>{nested=x.ctrl.run({});return{evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sources()};}});
+ assert.equal((await x.ctrl.run(args())).status,'converged');assert.equal((await nested).status,'invalid_input');assert.equal(x.stats.plan,1);
+});
+test('reused nested run preserves the valid currently running cycle',async()=>{
+ let nested;
+ const x=setup({delta:30000,context:()=>{nested=x.ctrl.run(args());return{evaluatedAt:clock,maxExchangeAgeMs:60000,sources:sources()};}});
+ assert.equal((await x.ctrl.run(args())).status,'converged');assert.equal((await nested).status,'cycle_reused');assert.equal(x.stats.plan,1);
+});
+test('cancellation during a context property getter still prevents planner',async()=>{
+ const x=setup({delta:30000,context:()=>({get evaluatedAt(){x.ctrl.cancel();return clock;},maxExchangeAgeMs:60000,sources:sources()})});
+ assert.equal((await x.ctrl.run(args())).status,'cancelled');assert.equal(x.stats.plan,0);assert.equal(x.ctrl.snapshot(),null);
+});
+
+
+
