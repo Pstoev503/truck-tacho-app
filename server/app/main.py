@@ -6,6 +6,7 @@
 """
 import math
 import os
+import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -152,7 +153,9 @@ class RegisterIn(BaseModel):
 @app.post("/api/owner/register")
 def register(body: RegisterIn, db: Session = Depends(get_db)):
     required = os.environ.get("REGISTRATION_CODE", "")
-    if required and body.registration_code != required:
+    if not required.strip():
+        raise HTTPException(503, "Регистрацията не е активирана")
+    if not hmac.compare_digest(body.registration_code.encode("utf-8"), required.encode("utf-8")):
         raise HTTPException(403, "Нужен е код за регистрация")
     if db.scalar(select(User).where(User.email == body.email)):
         raise HTTPException(409, "Има профил с този имейл — влез с паролата")
