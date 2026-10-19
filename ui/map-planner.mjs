@@ -5,6 +5,7 @@ import { evaluateParkingCandidates } from '../engine/parking-candidates.js';
 import { loadPlannerInitialState } from './planner-initial-state.mjs';
 import { createDraft, draftFileName, parseDraftText, readDraftFile } from './planner-draft.mjs';
 import { DEFAULT_LOOKBACK_KM, restParkingWindow, validateLookbackKm } from './rest-parking-window.mjs';
+import { routeWindowPoints } from './route-window-geometry.mjs';
 import {
   describeParkingResults, parkingItemNode, parkingSummaryText, parkingTooltipNode, parseParkingText,
   readParkingFile, validateParkingWindow, windowInMeters
@@ -663,6 +664,32 @@ function element(tag, text, className) {
   return node;
 }
 
+// What the map shows for the stretch chosen before one pause, derived only from
+// the current state: no window (or no usable line) means nothing is drawn.
+export function parkingWindowOverlay(state) {
+  const rest = state?.parking?.restWindow;
+  if (!rest || !Array.isArray(state.points) || state.points.length < 2) return null;
+  let points;
+  try {
+    points = routeWindowPoints(state.points, { minOffsetM: rest.minOffsetM, maxOffsetM: rest.maxOffsetM });
+  } catch {
+    return null;
+  }
+  const end = points[points.length - 1];
+  const fromKm = (rest.minOffsetM / 1000).toFixed(2);
+  const toKm = (rest.maxOffsetM / 1000).toFixed(2);
+  return Object.freeze({
+    line: Object.freeze(points.map(point => Object.freeze([point.lat, point.lon]))),
+    rest: Object.freeze({ lat: end.lat, lon: end.lon }),
+    caption: `Отбелязан участък: ${fromKm}–${toKm} км по линията, до паузата „${rest.label ?? 'пауза'}“. ` +
+      'Само геометричен преглед: пътният достъп, паркингът и мястото не са потвърдени, нищо не е резервирано.'
+  });
+}
+
+// The whole route is fitted once per new plan result, not on every render, so
+// parking actions do not move the map; zooming to a window is explicit.
+let lastFittedResult = null;
+
 function renderPlanner(state, map, layers, controller) {
   const $ = id => document.getElementById(id);
   const pointsList = $('points');
@@ -757,7 +784,21 @@ function renderPlanner(state, map, layers, controller) {
         marker.bindTooltip('Ориентировъчно място за почивка — паркинг не е избран');
         layers.addLayer(marker);
       }
-      map.fitBounds(L.latLngBounds(state.points.map(point => [point.lat, point.lon])).pad(0.12));
+      if (lastFittedResult !== state.result) {
+        lastFittedResult = state.result;
+        map.fitBounds(L.latLngBounds(state.points.map(point => [point.lat, point.lon])).pad(0.12));
+      }
+    }
+    const overlay = parkingWindowOverlay(state);
+    if (overlay) {
+      layers.addLayer(L.polyline(overlay.line, { color: '#ffd166', weight: 10, opacity: 0.85 }));
+      const restMarker = L.circleMarker([overlay.rest.lat, overlay.rest.lon], {
+        radius: 10, weight: 3, color: '#ffd166', fillColor: '#111', fillOpacity: 1
+      });
+      const tooltip = document.createElement('div');
+      tooltip.textContent = overlay.caption;
+      restMarker.bindTooltip(tooltip);
+      layers.addLayer(restMarker);
     }
     for (const item of state.parking.items ?? []) {
       if (!item.marker) continue;
@@ -771,6 +812,10 @@ function renderPlanner(state, map, layers, controller) {
     }
   }
   renderParking(state.parking);
+  const windowOverlay = parkingWindowOverlay(state);
+  $('map-window-caption').textContent = windowOverlay ? windowOverlay.caption : '';
+  $('map-window-caption').hidden = !windowOverlay;
+  $('parking-window-show').disabled = !windowOverlay;
 
   $('departure-mode').value = state.departure.mode;
   $('departure-hours').value = String(state.departure.hours);
@@ -978,6 +1023,15 @@ if (typeof document !== 'undefined') {
     if (file) controller.loadParkingFile(file);
   });
   document.getElementById('parking-evaluate').addEventListener('click', () => controller.evaluateParking());
+  document.getElementById('parking-window-show').addEventListener('click', () => {
+    // Uses the current state only; a dropped window draws and zooms to nothing.
+    const overlay = parkingWindowOverlay(controller.getState());
+    if (!overlay) return;
+    const container = map.getContainer();
+    container.scrollIntoView({ block: 'center' });
+    map.fitBounds(L.latLngBounds(overlay.line).pad(0.25));
+    container.focus();
+  });
   document.getElementById('parking-clear').addEventListener('click', () => controller.clearParking());
   window.addEventListener('storage', event => {
     if (event.storageArea === localStorage) controller.storageChanged(event.key);
