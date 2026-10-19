@@ -9,10 +9,15 @@ import { validateTrafficExchange } from './traffic-contract.js';
 export function createTrafficCycle({ evaluate, plan, createRequest, validate = validateTrafficExchange } = {}) {
   if (![evaluate,plan,createRequest,validate].every(fn=>typeof fn==='function')) throw new TypeError('callbacks required');
   let generation=0, active=null;
+  const usedCycles=new Set();
   const snapshot=()=>active&&({cycle:active.cycle,routeRevision:active.routeRevision,attempt:active.attempt,status:active.status,etaMs:active.etaMs});
   const cancel=()=>{generation++;if(active)active.status='cancelled';active=null;return {status:'cancelled'};};
   const run=async ({cycle,routeRevision,initialPlan,requestIds,inputRevisions}={})=>{
+    const finish=(status,extra={})=>{if(active&&active.status==='running'){active.status=status;}return {status,...extra};};
     if(typeof cycle!=='string'||!cycle||typeof routeRevision!=='string'||!routeRevision||!Array.isArray(requestIds)||requestIds.length<3||new Set(requestIds.slice(0,3)).size!==3||!Array.isArray(inputRevisions)||inputRevisions.length<3||!initialPlan||!Number.isFinite(initialPlan.etaMs))return {status:'invalid_input',attempts:0};
+    const key=JSON.stringify([routeRevision,cycle]);
+    if(usedCycles.has(key))return {status:'cycle_reused',attempts:0};
+    usedCycles.add(key);
     const token=++generation;
     const state={cycle,routeRevision,attempt:0,status:'running',etaMs:initialPlan.etaMs};active=state;
     const current=()=>token===generation&&active===state;
@@ -24,19 +29,19 @@ export function createTrafficCycle({ evaluate, plan, createRequest, validate = v
       try{
         request=await createRequest({cycle,routeRevision,attempt,plan:previous,inputRevision:inputRevisions[attempt-1],requestId:requestIds[attempt-1]});
         if(!current())return {status:'cancelled',attempts:attempt-1};
-        if(!request||request.routeRevision!==routeRevision||request.evaluationCycle!==cycle||request.attempt!==attempt||request.requestId!==requestIds[attempt-1]||request.inputRevision!==inputRevisions[attempt-1])return {status:'invalid_request',attempts:attempt};
+        if(!request||request.routeRevision!==routeRevision||request.evaluationCycle!==cycle||request.attempt!==attempt||request.requestId!==requestIds[attempt-1]||request.inputRevision!==inputRevisions[attempt-1])return finish('invalid_request',{attempts:attempt});
         response=await evaluate(request);
         if(!current())return {status:'cancelled',attempts:attempt-1};
         const result=validate(request,response,{activeRequest:request});
-        if(!result?.valid)return {status:'invalid_exchange',attempts:attempt,errors:result?.errors??[]};
+        if(!result?.valid)return finish('invalid_exchange',{attempts:attempt,errors:result?.errors??[]});
         // Do not silently accept stale IDs even if an injected validator is permissive.
-        for(const field of ['requestId','routeRevision','evaluationCycle','inputRevision','attempt'])if(response?.[field]!==request[field])return {status:'stale_exchange',attempts:attempt,field};
-        if(response.segments?.some(s=>s.passability==='closed'||s.selected?.durationSeconds===null))return {status:'unavailable',attempts:attempt,reason:'closed_or_null_duration'};
-        if(response.segments?.some(s=>s.passability==='unknown'||s.vehicleApplicability!=='covered'||s.selected?.status!=='fresh'))return {status:'limited',attempts:attempt,reason:'unknown_or_uncovered'};
+        for(const field of ['requestId','routeRevision','evaluationCycle','inputRevision','attempt'])if(response?.[field]!==request[field])return finish('stale_exchange',{attempts:attempt,field});
+        if(response.segments?.some(s=>s.passability==='closed'||s.selected?.durationSeconds===null))return finish('unavailable',{attempts:attempt,reason:'closed_or_null_duration'});
+        if(response.segments?.some(s=>s.passability==='unknown'||s.vehicleApplicability!=='covered'||s.selected?.status!=='fresh'))return finish('limited',{attempts:attempt,reason:'unknown_or_uncovered'});
         next=await plan({request,response,previousPlan:previous,attempt});
         if(!current())return {status:'cancelled',attempts:attempt-1};
-      }catch(error){return {status:'callback_error',attempts:attempt,stage:!request?'createRequest':!response?'evaluate':'plan',message:String(error?.message??error)};}
-      if(!next||!Number.isFinite(next.etaMs)||!Array.isArray(next.segments))return {status:'invalid_plan',attempts:attempt};
+      }catch(error){return finish('callback_error',{attempts:attempt,stage:!request?'createRequest':!response?'evaluate':'plan',message:String(error?.message??error)});}
+      if(!next||!Number.isFinite(next.etaMs)||!Array.isArray(next.segments))return finish('invalid_plan',{attempts:attempt});
       const passability=response.segments.map(s=>s.passability);
       const deltaSeconds=Math.abs(next.etaMs-previous.etaMs)/1000;
       state.etaMs=next.etaMs;lastAccepted={request,response,plan:next};
