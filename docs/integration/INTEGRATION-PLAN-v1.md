@@ -83,7 +83,7 @@ API compare:
 
 | Път | Пакети, които го пипат | Окончателен blob | Бележка |
 |---|---|---|---|
-| `engine/plan.js`, `engine/plan.test.js` | #14, #15, #27, #35 (и неприетият локален оригинал) | PLAN-05 `0397d69` / `b3dedae` | Междинните head-ове #14/#15/#27 **не** трябва да се сливат отделно след интеграцията: всеки би върнал по-стар blob |
+| `engine/plan.js`, `engine/plan.test.js` | #14, #15, #27, #35 (и неприетият локален оригинал) | PLAN-05 `0397d69` / `b3dedae` | Отделни merge-ове на #14/#15/#27 след интеграцията не са нужни. #14 и #15 са ancestors на кандидата, затова merge е already-up-to-date (no-op). #27 и #35 са пренесени като blob без ancestry: резултатът зависи от merge-base и тристранните промени (възможен е чист merge или конфликт). Това не е изпробвано, но не е и автоматичен rollback. Препоръка: да не се сливат отделно, а да се отбележат „включени“ след решение на Павел |
 | `.github/workflows/tests.yml` | #7, #41 | CI-01 `32f4c66` | #41 съдържа #7 + новия job |
 | `planner.html`, `ui/map-planner.*` | #34; неприетият #40 | UI-01 | #40 е следващ gate, не част от кандидата |
 | `docs/reports/2026-10-19-MAP-01.md`, `…-UI-01.md` | seed commit + финален отчет | финалният | seed-овете нямат самостоятелна стойност |
@@ -120,7 +120,9 @@ API compare:
    - б) PR към `main`, Draft до G1. Очакван diff: 50 файла (28 от #7 + 22 от раздел 2), без конфликт (`behind` 0).
    - в) Преди Ready: blob проверка (раздел 6) и CI run по head.
 3. **Сливане (решение на Павел, не на агент):** с merge commit, не squash, за да се запази проследяването към staging commit-ите и PR номерата.
-4. **След сливането (решение на собственика):** затваряне като „включени“ на #7, #14, #15, #16, #17, #25, #27, #34, #35, #37, #41. Те не трябва да се сливат отделно, защото #14/#15/#27 биха върнали стари blob-ове на `plan.js`.
+4. **След сливането (решение на собственика):** затваряне като „включени“ на #7, #14, #15, #16, #17, #25, #27, #34, #35, #37, #41. Отделни merge-ове не са нужни:
+   - за ancestors (#7, #14, #15, #25, #34, #41) merge е no-op;
+   - за пренесените без ancestry (#16, #17, #27, #35, #37) тристранният merge спрямо merge-base може да мине чисто или да даде конфликт. Не е изпробвано и би добавило излишна история.
 5. **Документационен PR (отделен, по избор):** от новия `main`, с точните blob-ове на #9, #11, #23, #30. TI-01 #21 се отлага, докато TI-02 не бъде приет с erratum-а на примерите.
 6. **Следващи gates, извън този кандидат:** UI-02 #40 (върнат за `storage.clear`/`key:null`) и TI-02 #31 (без receipt). Всеки — като отделен PR върху новия `main` след собственото си приемане.
 
@@ -128,39 +130,52 @@ API compare:
 
 ## 6. Проверки за бъдещия състав
 
-Върху кандидата (в корена на checkout-а):
+Върху кандидата, **от корена** на checkout-а (без `cd`; `node --test engine/*.test.js` дава същите 191 теста като `cd engine && node --test`):
 
 ```
-cd engine && node --test              # очаквано 191/191
-node --test ui/*.test.mjs             # очаквано 21/21
-node --test integration/*.test.mjs    # очаквано 8/8
+set -euo pipefail
+node --test engine/*.test.js             # очаквано 191/191
+node --test ui/*.test.mjs                # очаквано 21/21
+node --test integration/*.test.mjs       # очаквано 8/8
 ```
 
 Общо 220, колкото е CI-01. CI job-овете `server` (pytest с PostgreSQL 16) и `docker` (build) трябва да са success по точния head.
 
-Проверка, че всеки включен source файл е приетият blob:
+Acceptance gate за blob-овете. Спира при първата липсваща ревизия или път (exit 2), първия различен blob (exit 1) или брой файлове над `shef`, различен от 22 (exit 3):
 
-```
-for pair in \
-  "engine/plan.js 5ff4eeb32c2a14c0bb1c81f8fa4a1e9e53bc2b2f" \
-  "engine/plan.test.js 5ff4eeb32c2a14c0bb1c81f8fa4a1e9e53bc2b2f" \
-  "engine/map-plan.js 80b25535e87177e3ebe4026c9ad81943dd7d246f" \
-  "engine/map-plan.test.js 80b25535e87177e3ebe4026c9ad81943dd7d246f" \
-  "engine/route-position.js d9f009cd9c70f49ec4f6b77053ae4a7358988e0d" \
-  "engine/route-position.test.js d9f009cd9c70f49ec4f6b77053ae4a7358988e0d" \
-  "planner.html 909f77067f3b3588b30c9f673fd1e7f7ba96a831" \
-  "ui/map-planner.mjs 909f77067f3b3588b30c9f673fd1e7f7ba96a831" \
-  "ui/map-planner.css 909f77067f3b3588b30c9f673fd1e7f7ba96a831" \
-  "ui/map-planner.test.mjs 909f77067f3b3588b30c9f673fd1e7f7ba96a831" \
-  "integration/map-plan-rest.integration.test.mjs 272bcebafacbf79ed576f2e011a8298f21a683ec" \
-  ".github/workflows/tests.yml fa19f2148017526bced0213e41ee8dc5d8bc45c6"; do
-  set -- $pair
-  [ "$(git rev-parse CANDIDATE:$1)" = "$(git rev-parse $2:$1)" ] && echo "OK $1" || echo "DIFF $1"
-done
-git diff --stat 449dc5e047e9e71b5fdd0c9a22a3331b8e16e4be CANDIDATE   # очаквано точно 22 файла
+```bash
+#!/usr/bin/env bash
+# INT-02 blob gate: exits non-zero on the first missing revision/path or mismatched blob.
+set -euo pipefail
+CANDIDATE=${CANDIDATE:?set CANDIDATE to the integration head}
+SHEF=449dc5e047e9e71b5fdd0c9a22a3331b8e16e4be
+blob() { git rev-parse --verify --quiet "$1:$2" || { echo "MISSING $1:$2" >&2; exit 2; }; }
+check() { # check <path> <accepted head>
+  local want got
+  want=$(blob "$2" "$1"); got=$(blob "$CANDIDATE" "$1")
+  if [ "$want" != "$got" ]; then echo "DIFF $1 expected=$want ($2) got=$got" >&2; exit 1; fi
+  echo "OK $1 $got"
+}
+check engine/plan.js                                  5ff4eeb32c2a14c0bb1c81f8fa4a1e9e53bc2b2f
+check engine/plan.test.js                             5ff4eeb32c2a14c0bb1c81f8fa4a1e9e53bc2b2f
+check engine/map-plan.js                              80b25535e87177e3ebe4026c9ad81943dd7d246f
+check engine/map-plan.test.js                         80b25535e87177e3ebe4026c9ad81943dd7d246f
+check engine/route-position.js                        d9f009cd9c70f49ec4f6b77053ae4a7358988e0d
+check engine/route-position.test.js                   d9f009cd9c70f49ec4f6b77053ae4a7358988e0d
+check planner.html                                    909f77067f3b3588b30c9f673fd1e7f7ba96a831
+check ui/map-planner.mjs                              909f77067f3b3588b30c9f673fd1e7f7ba96a831
+check ui/map-planner.css                              909f77067f3b3588b30c9f673fd1e7f7ba96a831
+check ui/map-planner.test.mjs                         909f77067f3b3588b30c9f673fd1e7f7ba96a831
+check integration/map-plan-rest.integration.test.mjs  272bcebafacbf79ed576f2e011a8298f21a683ec
+check .github/workflows/tests.yml                     fa19f2148017526bced0213e41ee8dc5d8bc45c6
+n=$(git diff --name-only "$SHEF" "$CANDIDATE" | wc -l)
+if [ "$n" -ne 22 ]; then echo "FILECOUNT $n != 22 vs shef" >&2; exit 3; fi
+echo "PASS 12 blobs, 22 files over shef"
 ```
 
-(`CANDIDATE` е head на интеграционния клон. Отчетите се проверяват по таблицата в раздел 2.)
+Пуска се с `CANDIDATE=<head> bash blob-gate.sh` в checkout, който съдържа всички изброени commit-и (`git fetch` на приетите head-ове при shallow clone).
+
+`CANDIDATE` е head на интеграционния клон. Отчетите се проверяват по таблицата в раздел 2. Доказателство за поведението на gate-а е в отчета INT-02.
 
 **Ръчен браузърен flow** на `planner.html` (UI-01), по критериите на Codex:
 1. Чертане на маршрут.
@@ -175,6 +190,7 @@ git diff --stat 449dc5e047e9e71b5fdd0c9a22a3331b8e16e4be CANDIDATE   # очак�
 ## 7. Какво не е направено
 
 - Локален merge rehearsal към `main` **не** е изпълняван. Твърдението „без конфликт“ стъпва на ancestry (`behind` 0), а не на изпробван merge.
+- Merge на отделните стари PR-и (#16, #17, #27, #35, #37) след интеграцията също не е изпробван (раздел 3).
 - Тестове на различен състав (например с документационните пакети или с ново `shef`) не са пускани.
 - Сверката на Leaflet с upstream не е правена.
 - G1 не е започвана; тя е отделна задача.
