@@ -81,3 +81,67 @@ test('default validator accepted complete example 4 is closed/unavailable',async
 test('default validator accepted complete example 5 is limited uncovered',async()=>{const x=integration(5);assert.equal((await x.ctrl.run(x.args)).status,'limited')});
 test('default validator full example 1 with explicit open provenance converges',async()=>{const x=integration(1,{open:true,deltas:[60000]});const out=await x.ctrl.run(x.args);assert.equal(out.status,'converged',JSON.stringify(out));assert.equal(out.attempts,1)});
 test('default validator full example 1 with explicit open provenance max three',async()=>{const x=integration(1,{open:true,deltas:[120000,120000,120000]});const out=await x.ctrl.run(x.args);assert.equal(out.status,'unstable_estimate',JSON.stringify(out));assert.equal(x.calls,3)});
+
+const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
+const echo=request=>({requestId:request.requestId,routeRevision:request.routeRevision,evaluationCycle:request.evaluationCycle,inputRevision:request.inputRevision,attempt:request.attempt,segments:[{passability:'open',vehicleApplicability:'covered',selected:{durationSeconds:300,status:'fresh'}}]});
+for(const stage of ['createRequest','evaluate','plan']){
+ for(const transition of ['new_cycle','cancel']){
+  test('old rejected '+stage+' after '+transition+' cannot poison active snapshot',async()=>{
+   const old=deferred(),fresh=deferred();
+   let calls=0;
+   const baseCreate=async ({cycle,routeRevision,attempt,inputRevision,requestId,plan})=>({contractVersion:'0.1',evaluationCycle:cycle,routeRevision,attempt,inputRevision,requestId,segments:clone(plan.segments)});
+   const createRequest=async args=>{
+     const request=await baseCreate(args);
+     if(stage==='createRequest')return (++calls===1?old.promise:fresh.promise);
+     return request;
+   };
+   const evaluate=async request=>{
+     if(stage==='evaluate')return (++calls===1?old.promise:fresh.promise);
+     return echo(request);
+   };
+   const plan=async ({previousPlan})=>{
+     if(stage==='plan')return (++calls===1?old.promise:fresh.promise);
+     return {...previousPlan,etaMs:previousPlan.etaMs+120000};
+   };
+   const x=setup({createRequest,evaluate,plan});
+   const oldRun=x.ctrl.run(x.args);
+   // Wait until the first deferred callback has been entered.
+   for(let i=0;i<12&&calls===0;i++)await Promise.resolve();
+   assert.equal(calls,1,stage+' old callback reached');
+   let newRun;
+   if(transition==='cancel'){
+     x.ctrl.cancel();
+     assert.equal(x.ctrl.snapshot(),null);
+   }else{
+     newRun=x.ctrl.run({...x.args,cycle:'new'});
+     for(let i=0;i<12&&calls<2;i++)await Promise.resolve();
+     assert.equal(calls,2,stage+' new callback reached');
+     assert.deepEqual([x.ctrl.snapshot().cycle,x.ctrl.snapshot().status],['new','running']);
+   }
+   old.reject(Error('old failure'));
+   const oldResult=await oldRun;
+   assert.equal(oldResult.status,'cancelled');
+   if(transition==='new_cycle'){
+     assert.deepEqual([x.ctrl.snapshot().cycle,x.ctrl.snapshot().status],['new','running']);
+     // Resolve the still-running new generation and verify it owns its terminal state.
+     if(stage==='createRequest')fresh.resolve(await baseCreate({...x.args,cycle:'new',attempt:1,inputRevision:x.args.inputRevisions[0],requestId:x.args.requestIds[0],plan:x.args.initialPlan}));
+     else if(stage==='evaluate')fresh.resolve(echo({requestId:'id1',routeRevision:'r1',evaluationCycle:'new',inputRevision:'in1',attempt:1}));
+     else fresh.resolve({...x.args.initialPlan,etaMs:x.args.initialPlan.etaMs+120000});
+     const result=await newRun;
+     assert.equal(result.status,'unstable_estimate');
+     assert.equal(x.ctrl.snapshot().cycle,'new');
+     assert.equal(x.ctrl.snapshot().status,'unstable_estimate');
+   }
+  });
+ }
+}
+test('old rejected callback cannot overwrite newer callback error',async()=>{
+ const old=deferred();let calls=0;
+ const x=setup({evaluate:()=>++calls===1?old.promise:Promise.reject(Error('new failure'))});
+ const previous=x.ctrl.run(x.args);await Promise.resolve();
+ const newer=await x.ctrl.run({...x.args,cycle:'new'});
+ assert.equal(newer.status,'callback_error');
+ old.reject(Error('old failure'));
+ assert.equal((await previous).status,'cancelled');
+ assert.deepEqual([x.ctrl.snapshot().cycle,x.ctrl.snapshot().status],['new','callback_error']);
+});
