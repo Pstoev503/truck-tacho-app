@@ -151,7 +151,8 @@
           "sourceId": "synthetic-live",
           "recordId": "syn-record-1",
           "recordVersion": "1",
-          "licenseRef": "synthetic-only"
+          "licenseRef": "synthetic-only",
+          "candidateRef": "measured:syn-seg-001"
         }
       ]
     }
@@ -308,7 +309,8 @@
           "sourceId": "synthetic-history",
           "recordId": "syn-record-2",
           "recordVersion": "1",
-          "licenseRef": "synthetic-only"
+          "licenseRef": "synthetic-only",
+          "candidateRef": "historical:syn-seg-001"
         }
       ]
     }
@@ -467,7 +469,8 @@
           "sourceId": "synthetic-history",
           "recordId": "syn-record-3",
           "recordVersion": "1",
-          "licenseRef": "synthetic-only"
+          "licenseRef": "synthetic-only",
+          "candidateRef": "historical:syn-seg-001"
         }
       ]
     }
@@ -791,7 +794,7 @@
           "licenseRef": "synthetic-only"
         },
         "selectionReason": "traffic_unavailable",
-        "candidateRef": "routing_base:syn-seg-001",
+        "candidateRef": "routingBase:syn-seg-001",
         "baseCandidateRef": null,
         "appliedEventRefs": []
       },
@@ -802,7 +805,8 @@
           "sourceId": "routing-engine",
           "recordId": "syn-record-5",
           "recordVersion": "1",
-          "licenseRef": "synthetic-only"
+          "licenseRef": "synthetic-only",
+          "candidateRef": "routingBase:syn-seg-001"
         }
       ]
     }
@@ -950,7 +954,7 @@
           "licenseRef": "synthetic-only"
         },
         "selectionReason": "traffic_unavailable",
-        "candidateRef": "routing_base:syn-seg-001",
+        "candidateRef": "routingBase:syn-seg-001",
         "baseCandidateRef": null,
         "appliedEventRefs": []
       },
@@ -961,7 +965,8 @@
           "sourceId": "routing-engine",
           "recordId": "syn-record-6",
           "recordVersion": "1",
-          "licenseRef": "synthetic-only"
+          "licenseRef": "synthetic-only",
+          "candidateRef": "routingBase:syn-seg-001"
         }
       ]
     }
