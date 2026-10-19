@@ -4,7 +4,7 @@ import {createTrafficCycle} from './traffic-cycle.js';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 const scenarioText=readFileSync(fileURLToPath(new URL('../docs/traffic-intelligence/SCENARIOS-v0.1.md',import.meta.url)),'utf8');
-const fullExamples=[...scenarioText.matchAll(/```json\\n([\\s\\S]*?)\\n```/g)].slice(0,12).map(m=>JSON.parse(m[1]));
+const fullExamples=[...scenarioText.matchAll(/```json\n([\s\S]*?)\n```/g)].slice(0,12).map(m=>JSON.parse(m[1]));
 const clone=x=>structuredClone(x);
 const setup=(opts={})=>{
  const requests=[],plans=[],responses=[];
