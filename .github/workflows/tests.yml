@@ -16,6 +16,34 @@ jobs:
         working-directory: engine
         run: node --test
 
+  ui-integration:
+    name: UI и integration (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # node --test exits 0 when a glob matches nothing, so missing files must fail here.
+      - name: Наличие на ui/*.test.mjs и integration/*.test.mjs
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for pattern in 'ui/*.test.mjs' 'integration/*.test.mjs'; do
+            files=($pattern)
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "::error::Няма тестови файлове за $pattern"
+              exit 1
+            fi
+            echo "$pattern: ${files[*]}"
+          done
+      - name: UI тестове (ui/*.test.mjs)
+        shell: bash
+        run: node --test ui/*.test.mjs
+      - name: Integration тестове (integration/*.test.mjs)
+        shell: bash
+        run: node --test integration/*.test.mjs
+
   server:
     runs-on: ubuntu-latest
     services:
