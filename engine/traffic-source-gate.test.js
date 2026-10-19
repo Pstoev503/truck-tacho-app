@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {validateTrafficExchangeWithSourceHealth as gate} from './traffic-source-gate.js';
 import {createTrafficCycle} from './traffic-cycle.js';
-const examples=[...readFileSync(fileURLToPath(new URL('../docs/traffic-intelligence/SCENARIOS-v0.1.md',import.meta.url)),'utf8').matchAll(/\`\`\`json\\n([\\s\\S]*?)\\n\`\`\`/g)].map(m=>JSON.parse(m[1]));
+const examples=[...readFileSync(fileURLToPath(new URL('../docs/traffic-intelligence/SCENARIOS-v0.1.md',import.meta.url)),'utf8').matchAll(/```json\n([\s\S]*?)\n```/g)].map(m=>JSON.parse(m[1]));
 const clone=x=>structuredClone(x);
 const at=100000;
 const healthy=(sourceId,licenseRef='synthetic-only',extra={})=>({sourceId,licenseRef,expectedIntervalMs:10000,maxAgeMs:50000,lastSuccessAt:99000,lastAttemptAt:99000,consecutiveFailures:0,permissionState:'declared-allowed',...extra});
