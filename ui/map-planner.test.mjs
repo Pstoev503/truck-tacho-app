@@ -1630,3 +1630,196 @@ test('an unusable line or window gives no overlay instead of stale or invented c
   assert.equal(parkingWindowOverlay({ ...base, parking: { restWindow: null } }), null);
   assert.equal(parkingWindowOverlay(undefined), null);
 });
+
+// UI-08: departure at a local date and time in Europe/Sofia.
+const absoluteDeparture = (date, time, fold = null) => ({ mode: 'absolute', date, time, fold });
+
+test('a winter and a summer date reach the real planner as the resolved UTC departure', async () => {
+  for (const [date, utc] of [['2026-11-02', '2026-11-02T06:00:00.000Z'], ['2027-07-15', '2027-07-15T05:00:00.000Z']]) {
+    const requests = [];
+    const controller = readyController({ adapter: request => { requests.push(request); return createMapPlan(request, dependencies); } });
+    controller.setDeparture(absoluteDeparture(date, '08:00'));
+    await controller.plan();
+    assert.equal(new Date(requests[0].departureUtcMs).toISOString(), utc);
+    assert.equal(requests[0].nowUtcMs, fixedNow);
+    const { result } = controller.getState();
+    assert.equal(result.state, 'estimated');
+    assert.equal(new Date(result.engineResult.departure).toISOString(), utc);
+  }
+});
+
+test('an autumn double hour needs an explicit choice before planning', async () => {
+  let calls = 0;
+  const controller = readyController({ adapter: request => { calls++; return echoed(request); } });
+  controller.setDeparture(absoluteDeparture('2026-10-25', '03:30'));
+  assert.equal(controller.getState().departureStatus.code, 'AMBIGUOUS_LOCAL_TIME');
+  assert.equal(controller.getState().departureStatus.candidates.length, 2);
+  const blocked = await controller.plan();
+  assert.equal(blocked.result, null);
+  assert.match(blocked.error, /два пъти/);
+  assert.equal(calls, 0, 'nothing is planned with a guessed occurrence');
+  const requests = [];
+  const chosen = readyController({ adapter: request => { requests.push(request); return echoed(request); } });
+  chosen.setDeparture(absoluteDeparture('2026-10-25', '03:30', 'later'));
+  await chosen.plan();
+  assert.equal(new Date(requests[0].departureUtcMs).toISOString(), '2026-10-25T01:30:00.000Z');
+});
+
+test('a spring-gap time, a past moment or an incomplete date is refused without changing route or history', async () => {
+  let calls = 0;
+  const controller = readyController({ adapter: request => { calls++; return echoed(request); } });
+  const before = controller.getState();
+  for (const [departure, message] of [
+    [absoluteDeparture('2026-03-29', '03:30'), /не съществува/],
+    [absoluteDeparture('2026-10-19', '10:59'), /в миналото/],
+    [absoluteDeparture('', '08:00'), /ГГГГ-ММ-ДД/],
+    [absoluteDeparture('2026-11-02', ''), /ЧЧ:ММ/]
+  ]) {
+    controller.setDeparture(departure);
+    const outcome = await controller.plan();
+    assert.equal(outcome.result, null);
+    assert.match(outcome.error, message);
+    const after = controller.getState();
+    assert.deepEqual(after.points, before.points);
+    assert.deepEqual(after.roadTypes, before.roadTypes);
+    assert.deepEqual(after.history, before.history);
+  }
+  assert.equal(calls, 0);
+});
+
+test('exactly now is allowed and one minute earlier is past, against the injected clock', async () => {
+  const requests = [];
+  let clock = Date.parse('2026-11-02T06:00:00Z');
+  const controller = readyController({ now: () => clock, adapter: request => { requests.push(request); return echoed(request); } });
+  controller.setDeparture(absoluteDeparture('2026-11-02', '08:00'));
+  await controller.plan();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].departureUtcMs, clock);
+  clock += 60_000;
+  const late = await controller.plan();
+  assert.match(late.error, /в миналото/);
+  assert.equal(requests.length, 1, 'not moved to another day');
+  assert.equal(controller.getState().departureStatus.inPast, true);
+});
+
+test('setDeparture is strict for date-and-time values and keeps the old departure on refusal', () => {
+  const controller = readyController();
+  controller.setDeparture(absoluteDeparture('2026-11-02', '08:00'));
+  const before = controller.getState();
+  for (const bad of [
+    { mode: 'absolute', date: 20261102, time: '08:00', fold: null },
+    { mode: 'absolute', date: '2026-11-02', time: 800, fold: null },
+    { mode: 'absolute', date: '2026-11-02', time: '08:00', fold: 'first' },
+    { mode: 'absolute', date: '2026-11-02', time: '08:00', fold: null, timeZone: 'UTC' }
+  ]) {
+    assert.throws(() => controller.setDeparture(bad), TypeError);
+  }
+  assert.deepEqual(controller.getState().departure, before.departure);
+  assert.equal(controller.getState().inputRevision, before.inputRevision);
+});
+
+test('changing date, time, fold or mode drops the plan, parking result and window; late callbacks stay stale', async () => {
+  const gate = deferred();
+  let slow = false;
+  const { controller, restIndex } = await plannedLongRoute({
+    adapter: async request => { if (slow) await gate.promise; return createMapPlan(request, dependencies); }
+  });
+  controller.loadParkingText(parkingText(parkingRecord('p1', 2)));
+  controller.selectRestForParking(restIndex, 20);
+  await controller.evaluateParking();
+  const before = controller.getState();
+  controller.setDeparture(absoluteDeparture('2026-11-02', '08:00'));
+  const after = controller.getState();
+  assert.equal(after.result, null);
+  assert.equal(after.parking.result, null);
+  assert.equal(after.parking.restWindow, null);
+  assert.equal(after.parking.count, 1);
+  assert.equal(after.routeRevision, before.routeRevision);
+  assert.equal(after.inputRevision, before.inputRevision + 1);
+  slow = true;
+  const pending = controller.plan();
+  controller.setDeparture(absoluteDeparture('2026-11-02', '09:00'));
+  gate.resolve();
+  assert.equal((await pending).stale, true);
+  assert.equal(controller.getState().result, null);
+  for (const change of [
+    c => c.setDeparture(absoluteDeparture('2026-11-03', '09:00')),
+    c => c.setDeparture(absoluteDeparture('2026-10-25', '03:30', 'earlier')),
+    c => c.setDeparture({ mode: 'now', hours: 0, minutes: 0 })
+  ]) {
+    const revision = controller.getState().inputRevision;
+    change(controller);
+    assert.equal(controller.getState().inputRevision, revision + 1);
+  }
+});
+
+test('now and relative departures keep their previous behaviour after using a date', async () => {
+  const requests = [];
+  const controller = readyController({ adapter: request => { requests.push(request); return echoed(request); } });
+  controller.setDeparture(absoluteDeparture('2026-11-02', '08:00'));
+  controller.setDeparture({ mode: 'relative', hours: 2, minutes: 15 });
+  await controller.plan();
+  controller.setDeparture({ mode: 'now', hours: 0, minutes: 0 });
+  await controller.plan();
+  assert.equal(requests[0].departureUtcMs, fixedNow + 2.25 * 3_600_000);
+  assert.equal(requests[1].departureUtcMs, fixedNow);
+  assert.equal(controller.getState().departureStatus, null);
+});
+
+test('a future date does not turn the time before departure into rest', async () => {
+  const activities = JSON.stringify([
+    { type: 'rest', start: fixedNow - 15 * 3_600_000, end: fixedNow - 4 * 3_600_000 },
+    { type: 'drive', start: fixedNow - 4 * 3_600_000, end: fixedNow }
+  ]);
+  const controller = createMapPlannerController({ now: () => fixedNow });
+  controller.loadInitialHistory(key => (key === 'th_activities' ? activities : null));
+  longRoute(controller);
+  // 12:00 Sofia = 09:00 UTC: one hour after the recorded driving. Counted as
+  // rest, that hour would clear the 4 h of continuous driving.
+  controller.setDeparture(absoluteDeparture('2026-10-19', '12:00'));
+  await controller.plan();
+  const { result } = controller.getState();
+  assert.equal(result.state, 'estimated');
+  assert.equal(new Date(result.engineResult.departure).toISOString(), '2026-10-19T09:00:00.000Z');
+  const [firstDrive, firstRest] = result.engineResult.events;
+  assert.equal(firstDrive.type, 'drive');
+  assert.equal(Math.round((firstDrive.end - firstDrive.start) / 60_000), 30, 'only the 30 min left of 4 h 30 min');
+  assert.equal(firstRest.label, 'Пауза 45 мин');
+});
+
+test('a date-and-time draft exports as version 2 and imports atomically into another planner', async () => {
+  const source = makeController();
+  longRoute(source);
+  source.setDeparture(absoluteDeparture('2026-10-25', '03:30', 'later'));
+  const { text } = source.exportDraft();
+  const parsed = JSON.parse(text);
+  assert.equal(parsed.version, 2);
+  assert.deepEqual(parsed.departure, { mode: 'absolute', date: '2026-10-25', time: '03:30', timeZone: 'Europe/Sofia', fold: 'later' });
+  for (const word of ['departureUtcMs', 'utcMs', 'request-', 'activities']) assert.ok(!text.includes(word), word);
+
+  const target = makeController();
+  target.addPoint({ lat: 1, lon: 1 });
+  const before = target.getState();
+  const bad = target.importDraftText(JSON.stringify({ ...parsed, departure: { ...parsed.departure, fold: null } }));
+  assert.equal(bad.loaded, false);
+  assert.deepEqual(target.getState().points, before.points, 'an invalid version 2 file changes nothing');
+  assert.deepEqual(target.getState().departure, before.departure);
+  assert.equal(target.importDraftText(text).loaded, true);
+  assert.deepEqual(target.getState().departure, source.getState().departure);
+  assert.equal(target.getState().history.mode, 'unselected');
+});
+
+test('a past date loads from a file for correction, but planning waits for a future one', async () => {
+  const source = makeController();
+  longRoute(source);
+  source.setDeparture(absoluteDeparture('2026-10-19', '09:00'));
+  const { text } = source.exportDraft();
+  const controller = makeController();
+  assert.equal(controller.importDraftText(text).loaded, true);
+  controller.chooseNoHistory();
+  const refused = await controller.plan();
+  assert.match(refused.error, /в миналото/);
+  controller.setDeparture(absoluteDeparture('2026-10-19', '18:00'));
+  await controller.plan();
+  assert.equal(new Date(controller.getState().result.engineResult.departure).toISOString(), '2026-10-19T15:00:00.000Z');
+});

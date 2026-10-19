@@ -55,12 +55,24 @@
       <select id="departure-mode">
         <option value="now">Сега</option>
         <option value="relative">След избран интервал</option>
+        <option value="absolute">На дата и час</option>
       </select>
       <div id="relative-inputs" class="relative-inputs" hidden>
         <label>След <input id="departure-hours" type="number" min="0" max="720" value="0"> часа и
           <input id="departure-minutes" type="number" min="0" max="59" value="0"> минути</label>
       </div>
-      <p class="notice">Потегляне сега или след избран интервал. Часовете са по българско време.</p>
+      <div id="absolute-inputs" class="relative-inputs" hidden>
+        <label for="departure-date">Дата (Europe/Sofia)</label>
+        <input id="departure-date" type="date" min="2000-01-01" max="2099-12-31">
+        <label for="departure-time">Час (Europe/Sofia)</label>
+        <input id="departure-time" type="time" step="60">
+        <div id="departure-fold-block" hidden>
+          <label for="departure-fold">Този час настъпва два пъти (връщане към зимно време)</label>
+          <select id="departure-fold"></select>
+        </div>
+        <p id="departure-status" class="history-status" aria-live="polite"></p>
+      </div>
+      <p class="notice">Потегляне сега, след избран интервал или на дата и час. Датата и часът са по часовата зона Europe/Sofia, независимо от настройката на устройството. Час, който не съществува при преминаване към лятно време, не се приема; при двойно настъпване се избира изрично.</p>
       <label for="break-style">Пауза по време на управление</label>
       <select id="break-style">
         <option value="45">45 мин наведнъж</option>
