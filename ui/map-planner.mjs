@@ -7,6 +7,9 @@ import { createDraft, draftFileName, parseDraftText, readDraftFile } from './pla
 import { DEFAULT_LOOKBACK_KM, restParkingWindow, validateLookbackKm } from './rest-parking-window.mjs';
 import { routeWindowPoints } from './route-window-geometry.mjs';
 import {
+  DEPARTURE_TIME_ZONE, DepartureError, FOLDS, absoluteDepartureUtcMs, formatUtcOffset, resolveSofiaDeparture
+} from './planner-departure.mjs';
+import {
   describeParkingResults, parkingItemNode, parkingSummaryText, parkingTooltipNode, parseParkingText,
   readParkingFile, validateParkingWindow, windowInMeters
 } from './planner-parking.mjs';
@@ -56,6 +59,7 @@ export function createMapPlannerController({
     routeRevision,
     inputRevision,
     departure: { ...departure },
+    departureStatus: departureStatus(),
     breakStyle,
     draft: { mode: draft.mode, fileName: draft.fileName, error: draft.error },
     history: clone(history),
@@ -75,6 +79,29 @@ export function createMapPlannerController({
       lookbackKm: parking.lookbackKm
     }
   });
+  // For a date-and-time departure: what it resolves to now, for display only.
+  // Planning resolves it again with the clock at that moment.
+  function departureStatus() {
+    if (departure.mode !== 'absolute') return null;
+    try {
+      const resolved = resolveSofiaDeparture(departure);
+      const currentNow = now();
+      return {
+        utcMs: resolved.utcMs,
+        offsetMinutes: resolved.offsetMinutes,
+        candidates: resolved.candidates,
+        inPast: Number.isFinite(currentNow) && resolved.utcMs < currentNow,
+        error: null,
+        code: null
+      };
+    } catch (caught) {
+      let candidates = [];
+      if (caught instanceof DepartureError && caught.code === 'AMBIGUOUS_LOCAL_TIME') {
+        candidates = resolveSofiaDeparture({ ...departure, fold: 'earlier' }).candidates;
+      }
+      return { utcMs: null, offsetMinutes: null, candidates, inPast: false, error: caught.message, code: caught.code ?? null };
+    }
+  }
   const notify = () => onChange(snapshot());
   const dropParkingResult = () => {
     parking.revision++;
@@ -141,8 +168,9 @@ export function createMapPlannerController({
   function requestForPlan() {
     const currentNow = now();
     if (!Number.isFinite(currentNow)) throw new Error('Не може да се определи текущият час.');
-    const departureUtcMs = currentNow +
-      (departure.mode === 'relative'
+    const departureUtcMs = departure.mode === 'absolute'
+      ? absoluteDepartureUtcMs(departure, currentNow)
+      : currentNow + (departure.mode === 'relative'
         ? departure.hours * HOUR_MS + departure.minutes * MINUTE_MS : 0);
     const geometry = clone(points);
     const routeIndex = indexRoute(geometry, { routeRevision: `route-${routeRevision}` });
@@ -528,6 +556,18 @@ export function createMapPlannerController({
       invalidate(false);
     },
     setDeparture(nextDeparture) {
+      if (nextDeparture?.mode === 'absolute') {
+        // Local Sofia date and time; incomplete values are kept and shown as
+        // errors, and are resolved and checked only when planning.
+        const { date, time, fold = null, timeZone = DEPARTURE_TIME_ZONE } = nextDeparture;
+        if (typeof date !== 'string' || typeof time !== 'string' ||
+            (fold !== null && !FOLDS.includes(fold)) || timeZone !== DEPARTURE_TIME_ZONE) {
+          throw new TypeError('Невалидни дата, час или избор на настъпване.');
+        }
+        departure = { mode: 'absolute', date, time, timeZone: DEPARTURE_TIME_ZONE, fold };
+        invalidate(false);
+        return;
+      }
       if (!nextDeparture || !['now', 'relative'].includes(nextDeparture.mode)) {
         throw new TypeError('Избери „Сега“ или относително потегляне.');
       }
@@ -549,7 +589,7 @@ export function createMapPlannerController({
         if (points.length < 2) throw new Error('Добави поне две точки върху картата.');
         request = requestForPlan().request;
       } catch (caught) {
-          error = caught.message === 'Добави поне две точки върху картата.' ||
+          error = caught instanceof DepartureError ? caught.message : caught.message === 'Добави поне две точки върху картата.' ||
             caught.message === 'Избери изричен тип път за всеки положителен участък.' ||
             caught.message.startsWith('Използвай дневника')
             ? caught.message : 'Точките не образуват валидна линия; провери координатите и разстоянията.';
@@ -818,9 +858,14 @@ function renderPlanner(state, map, layers, controller) {
   $('parking-window-show').disabled = !windowOverlay;
 
   $('departure-mode').value = state.departure.mode;
-  $('departure-hours').value = String(state.departure.hours);
-  $('departure-minutes').value = String(state.departure.minutes);
   $('relative-inputs').hidden = state.departure.mode !== 'relative';
+  $('absolute-inputs').hidden = state.departure.mode !== 'absolute';
+  if (state.departure.mode === 'absolute') {
+    renderAbsoluteDeparture(state.departure, state.departureStatus);
+  } else {
+    $('departure-hours').value = String(state.departure.hours);
+    $('departure-minutes').value = String(state.departure.minutes);
+  }
   $('break-style').value = state.breakStyle;
   renderDraft(state.draft);
   const historyStatus = $('history-status');
@@ -849,6 +894,36 @@ function renderPlanner(state, map, layers, controller) {
     ? 'Добави поне две точки върху картата.' : '');
   $('plan').disabled = state.points.length < 2 || !['loaded', 'none'].includes(state.history.mode);
   renderSchedule(state.result, controller);
+}
+
+function renderAbsoluteDeparture(departure, status) {
+  const $ = id => document.getElementById(id);
+  $('departure-date').value = departure.date;
+  $('departure-time').value = departure.time;
+  const foldBlock = $('departure-fold-block');
+  const foldSelect = $('departure-fold');
+  const ambiguous = status.candidates.length === 2;
+  foldBlock.hidden = !ambiguous;
+  if (ambiguous) {
+    const options = [['', 'Избери настъпване'], ...status.candidates.map((candidate, index) => [
+      FOLDS[index],
+      `${index === 0 ? 'Първото' : 'Второто'} настъпване (${formatUtcOffset(candidate.offsetMinutes)})`
+    ])];
+    foldSelect.replaceChildren(...options.map(([value, label]) => {
+      const option = element('option', label);
+      option.value = value;
+      return option;
+    }));
+    foldSelect.value = departure.fold ?? '';
+  }
+  const status$ = $('departure-status');
+  if (status.error) {
+    status$.textContent = status.error;
+  } else {
+    const utc = new Date(status.utcMs).toISOString().slice(0, 16).replace('T', ' ');
+    status$.textContent = `Потегляне: ${departure.date} ${departure.time} (${DEPARTURE_TIME_ZONE}, ${formatUtcOffset(status.offsetMinutes)}) = ${utc} UTC.` +
+      (status.inPast ? ' Този момент вече е минал; избери бъдещи дата и час, за да планираш.' : '');
+  }
 }
 
 function renderDraft(draft) {
@@ -961,8 +1036,24 @@ if (typeof document !== 'undefined') {
   map.on('click', event => controller.addPoint({ lat: event.latlng.lat, lon: event.latlng.lng }));
   document.getElementById('remove-last').addEventListener('click', () => controller.removeLastPoint());
   document.getElementById('clear-route').addEventListener('click', () => controller.clear());
+  const absoluteDeparture = fold => ({
+    mode: 'absolute',
+    date: document.getElementById('departure-date').value,
+    time: document.getElementById('departure-time').value,
+    fold
+  });
+  for (const id of ['departure-date', 'departure-time']) {
+    // A new date or time drops an earlier first/second-occurrence choice.
+    document.getElementById(id).addEventListener('change', () => controller.setDeparture(absoluteDeparture(null)));
+  }
+  document.getElementById('departure-fold').addEventListener('change', event =>
+    controller.setDeparture(absoluteDeparture(event.target.value || null)));
   document.getElementById('departure-mode').addEventListener('change', event => {
     document.getElementById('relative-inputs').hidden = event.target.value !== 'relative';
+    if (event.target.value === 'absolute') {
+      controller.setDeparture(absoluteDeparture(null));
+      return;
+    }
     controller.setDeparture({
       mode: event.target.value,
       hours: Number(document.getElementById('departure-hours').value),
@@ -971,8 +1062,8 @@ if (typeof document !== 'undefined') {
   });
   for (const id of ['departure-hours', 'departure-minutes']) {
     document.getElementById(id).addEventListener('change', () =>
-      controller.setDeparture({
-        mode: document.getElementById('departure-mode').value,
+      document.getElementById('departure-mode').value === 'relative' && controller.setDeparture({
+        mode: 'relative',
         hours: Number(document.getElementById('departure-hours').value),
         minutes: Number(document.getElementById('departure-minutes').value)
       }));

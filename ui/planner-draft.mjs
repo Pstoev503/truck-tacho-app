@@ -1,9 +1,13 @@
 // Planner draft file: the drawn line and the choices only. It never carries the
 // activity log, identity, tokens, parking lists, computed plans or request IDs.
 import { indexRoute } from '../engine/route-position.js';
+import { DEPARTURE_TIME_ZONE, resolveSofiaDeparture } from './planner-departure.mjs';
 
 export const DRAFT_FORMAT = 'top10eu-planner-draft';
 export const DRAFT_VERSION = 1;
+// Version 2 is used only for a departure at a local date and time; drafts with
+// "now" or a relative departure stay version 1 exactly as before.
+export const DRAFT_VERSION_ABSOLUTE = 2;
 export const MAX_DRAFT_FILE_BYTES = 1024 * 1024;
 export const MAX_DRAFT_POINTS = 500;
 
@@ -97,7 +101,30 @@ function validateChoices(choices, pointCount) {
   return copy;
 }
 
+// Version 2: a local Sofia date and time. A past date is allowed in the file
+// (it can be corrected before planning); a time that does not exist or that
+// occurs twice without an explicit fold is refused.
+function validateAbsoluteDeparture(departure) {
+  if (isObject(departure) && departure.mode !== 'absolute') {
+    fail('VERSION_MISMATCH', 'Версия 2 на файла е само за потегляне на дата и час.');
+  }
+  requireExactKeys(departure, ['mode', 'date', 'time', 'timeZone', 'fold'], 'departure');
+  const { mode, date, time, timeZone, fold } = departure;
+  if (mode !== 'absolute' || timeZone !== DEPARTURE_TIME_ZONE) {
+    fail('INVALID_DEPARTURE', 'Невалидно потегляне във файла.');
+  }
+  try {
+    resolveSofiaDeparture({ date, time, fold });
+  } catch (caught) {
+    fail('INVALID_DEPARTURE', `Невалидно потегляне във файла: ${caught.message}`);
+  }
+  return { mode, date, time, timeZone, fold };
+}
+
 function validateDeparture(departure) {
+  if (isObject(departure) && departure.mode === 'absolute') {
+    fail('VERSION_MISMATCH', 'Потегляне на дата и час изисква версия 2 на файла.');
+  }
   requireExactKeys(departure, ['mode', 'hours', 'minutes'], 'departure');
   const { mode, hours, minutes } = departure;
   if (!DEPARTURE_MODES.has(mode) || !Number.isInteger(hours) || hours < 0 || hours > 720 ||
@@ -111,7 +138,9 @@ function validateDeparture(departure) {
 export function validateDraft(draft) {
   requireExactKeys(draft, DRAFT_KEYS, 'подготовката');
   if (draft.format !== DRAFT_FORMAT) fail('UNKNOWN_FORMAT', 'Файлът не е подготовка на курс от Top10EU.');
-  if (draft.version !== DRAFT_VERSION) fail('UNSUPPORTED_VERSION', 'Версията на файла не се поддържа.');
+  if (draft.version !== DRAFT_VERSION && draft.version !== DRAFT_VERSION_ABSOLUTE) {
+    fail('UNSUPPORTED_VERSION', 'Версията на файла не се поддържа.');
+  }
   if (!Number.isSafeInteger(draft.exportedAtUtcMs) || draft.exportedAtUtcMs < 0) {
     fail('INVALID_EXPORTED_AT', 'exportedAtUtcMs трябва да е цяло число UTC милисекунди.');
   }
@@ -122,13 +151,16 @@ export function validateDraft(draft) {
     points,
     roadTypes: validateRoadTypes(draft.roadTypes, points.length),
     choices: validateChoices(draft.choices, points.length),
-    departure: validateDeparture(draft.departure),
+    departure: draft.version === DRAFT_VERSION_ABSOLUTE
+      ? validateAbsoluteDeparture(draft.departure)
+      : validateDeparture(draft.departure),
     breakStyle: draft.breakStyle
   });
 }
 
 export function createDraft({ points, roadTypes, choices, departure, breakStyle }, exportedAtUtcMs) {
-  const draft = { format: DRAFT_FORMAT, version: DRAFT_VERSION, exportedAtUtcMs, points, roadTypes, choices, departure, breakStyle };
+  const version = departure?.mode === 'absolute' ? DRAFT_VERSION_ABSOLUTE : DRAFT_VERSION;
+  const draft = { format: DRAFT_FORMAT, version, exportedAtUtcMs, points, roadTypes, choices, departure, breakStyle };
   validateDraft(draft);
   return JSON.stringify(draft, null, 2);
 }
