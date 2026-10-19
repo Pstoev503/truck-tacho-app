@@ -4,7 +4,7 @@ import {createTrafficCycle} from './traffic-cycle.js';
 const clone=x=>structuredClone(x);
 const setup=(opts={})=>{
  const requests=[],plans=[],responses=[];
- const initial={etaMs:1000000,passability:['open'],segments:[{segmentRef:'s',expectedEntryAt:'2026-10-19T08:30:00Z'}]};
+ const initial={etaMs:1000000,passability:opts.initialPassability??['open'],segments:[{segmentRef:'s',expectedEntryAt:'2026-10-19T08:30:00Z'}]};
  let revision=0;
  const evaluate=async r=>{requests.push(clone(r));const x={requestId:r.requestId,routeRevision:r.routeRevision,evaluationCycle:r.evaluationCycle,inputRevision:r.inputRevision,attempt:r.attempt,segments:[{passability:'open',vehicleApplicability:'covered',selected:{durationSeconds:300,status:'fresh'}}]};opts.mutate?.(x,r);responses.push(x);return x;};
  const plan=async ({previousPlan,attempt})=>{const x={etaMs:previousPlan.etaMs+(opts.deltas?.[attempt-1]??120000),passability:['open'],segments:[{segmentRef:'s',expectedEntryAt:'2026-10-19T09:15:00Z'}]};plans.push(x);return x;};
@@ -31,13 +31,22 @@ test('unknown passability limited',async()=>{const x=setup({mutate:b=>{b.segment
 test('uncovered truck limited',async()=>{const x=setup({mutate:b=>{b.segments[0].vehicleApplicability='unknown'}});assert.equal((await x.ctrl.run(x.args)).status,'limited')});
 test('planner owns expected entry including 45 minute pause',async()=>{const x=setup({deltas:[120000,0]});await x.ctrl.run(x.args);assert.equal(x.requests[1].segments[0].expectedEntryAt,'2026-10-19T09:15:00Z')});
 test('milliseconds ETA and seconds traffic never summed',async()=>{const x=setup({deltas:[120000,0]});const out=await x.ctrl.run(x.args);assert.equal(out.etaMs,1120000)});
-test('passability change prevents convergence',async()=>{let n=0;const x=setup({deltas:[0,0,0],mutate:b=>{b.segments[0].passability=++n===1?'open':'closed'}});const out=await x.ctrl.run(x.args);assert.equal(out.attempts,2);assert.equal(out.status,'unavailable')});
+test('passability change prevents convergence',async()=>{let n=0;const x=setup({initialPassability:['unknown'],deltas:[0,0,0],mutate:b=>{b.segments[0].passability=++n===1?'open':'closed'}});const out=await x.ctrl.run(x.args);assert.equal(out.attempts,2);assert.equal(out.status,'unavailable')});
 test('oscillation unstable',async()=>{const x=setup({deltas:[120000,-120000,120000]});assert.equal((await x.ctrl.run(x.args)).status,'unstable_estimate')});
 test('same route new cycle resets budget',async()=>{const x=setup();await x.ctrl.run(x.args);const y=await x.ctrl.run({...x.args,cycle:'c2'});assert.equal(y.attempts,3);assert.equal(x.requests.length,6)});
 test('cancel pending evaluation invalidates result',async()=>{let release;const x=setup({evaluate:()=>new Promise(r=>{release=r})});const p=x.ctrl.run(x.args);await Promise.resolve();x.ctrl.cancel();release({});assert.equal((await p).status,'cancelled')});
-test('new cycle supersedes pending result',async()=>{let release;let count=0;const x=setup({evaluate:()=>++count===1?new Promise(r=>{release=r}):Promise.resolve({})});const p=x.ctrl.run(x.args);await Promise.resolve();const newer=x.ctrl.run({...x.args,cycle:'c2'});release({});assert.equal((await p).status,'cancelled');assert.equal((await newer).status,'invalid_exchange')});
+test('new cycle supersedes pending result',async()=>{let release;let count=0;const x=setup({evaluate:r=>++count===1?new Promise(resolve=>{release=resolve}):Promise.resolve({requestId:r.requestId,routeRevision:r.routeRevision,evaluationCycle:r.evaluationCycle,inputRevision:r.inputRevision,attempt:r.attempt,segments:[{passability:'open',vehicleApplicability:'covered',selected:{durationSeconds:300,status:'fresh'}}]})});const p=x.ctrl.run(x.args);await Promise.resolve();const newer=x.ctrl.run({...x.args,cycle:'c2'});release({});assert.equal((await p).status,'cancelled');assert.equal((await newer).status,'unstable_estimate')});
 test('request inputs not mutated',async()=>{const x=setup({deltas:[0]});const before=clone(x.args);await x.ctrl.run(x.args);assert.deepEqual(x.args,before)});
 test('evaluation rejection is callback error without retry',async()=>{let n=0;const x=setup({evaluate:()=>{n++;throw Error('offline')}});assert.equal((await x.ctrl.run(x.args)).status,'callback_error');assert.equal(n,1)});
 test('planner rejection is callback error without retry',async()=>{const x=setup({plan:()=>{throw Error('planner')}});assert.equal((await x.ctrl.run(x.args)).status,'callback_error')});
 test('duplicate request ids rejected',async()=>{const x=setup();assert.equal((await x.ctrl.run({...x.args,requestIds:['same','same','same']})).status,'invalid_input')});
 test('callback dependencies required',()=>assert.throws(()=>createTrafficCycle({}),TypeError));
+
+test('same cycle cannot consume another three attempts',async()=>{const x=setup();await x.ctrl.run(x.args);assert.equal((await x.ctrl.run(x.args)).status,'cycle_reused');assert.equal(x.requests.length,3)});
+test('cancel does not reset cycle budget',async()=>{const x=setup();await x.ctrl.run(x.args);x.ctrl.cancel();assert.equal((await x.ctrl.run(x.args)).status,'cycle_reused');assert.equal(x.requests.length,3)});
+for(const [name,opts,status] of [
+ ['unavailable',{mutate:b=>b.segments[0].passability='closed'},'unavailable'],
+ ['limited',{mutate:b=>b.segments[0].passability='unknown'},'limited'],
+ ['invalid_exchange',{validate:()=>({valid:false,errors:[]})},'invalid_exchange'],
+ ['callback_error',{evaluate:()=>{throw Error('offline')}},'callback_error']
+])test('terminal snapshot '+name,async()=>{const x=setup(opts);assert.equal((await x.ctrl.run(x.args)).status,status);assert.equal(x.ctrl.snapshot().status,status)});
