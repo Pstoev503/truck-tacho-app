@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMapPlannerController, formatSofiaTime, formatViolation, parkingWindowOverlay, sampleRoute } from './map-planner.mjs';
+import { createMapPlannerController, formatSofiaTime, formatViolation, parkingWindowOverlay, sampleRoute, scheduleStageOverlay } from './map-planner.mjs';
 import { buildPlan } from '../engine/plan.js';
 import { indexRoute, pointAtOffset } from '../engine/route-position.js';
 import { createMapPlan } from '../engine/map-plan.js';
@@ -1822,4 +1822,201 @@ test('a past date loads from a file for correction, but planning waits for a fut
   controller.setDeparture(absoluteDeparture('2026-10-19', '18:00'));
   await controller.plan();
   assert.equal(new Date(controller.getState().result.engineResult.departure).toISOString(), '2026-10-19T15:00:00.000Z');
+});
+
+// UI-09: one schedule stage shown on the drawn line.
+test('showing a real drive or rest stage changes nothing in the plan, inputs or history and calls nothing', async () => {
+  let planCalls = 0, evaluateCalls = 0;
+  const { controller, result } = await plannedLongRoute({
+    adapter: request => { planCalls++; return createMapPlan(request, dependencies); },
+    evaluateParking: request => { evaluateCalls++; return evaluateParkingCandidates(request); }
+  });
+  const before = controller.getState();
+  const driveIndex = result.events.findIndex(event => event.type === 'drive');
+  assert.deepEqual(controller.selectScheduleStage(driveIndex), { selected: true });
+  const after = controller.getState();
+  assert.equal(after.stage.selection.kind, 'drive');
+  assert.equal(after.stage.selection.result, after.result);
+  assert.equal(after.result, before.result);
+  assert.equal(after.routeRevision, before.routeRevision);
+  assert.equal(after.inputRevision, before.inputRevision);
+  assert.deepEqual(after.history, before.history);
+  assert.deepEqual(after.points, before.points);
+  assert.equal(planCalls, 1);
+  assert.equal(evaluateCalls, 0);
+  const view = scheduleStageOverlay(after);
+  assert.equal(view.kind, 'drive');
+  assert.ok(view.line.length > 2);
+  const restIndex = result.events.findIndex(event => event.type === 'rest');
+  controller.selectScheduleStage(restIndex);
+  const restView = scheduleStageOverlay(controller.getState());
+  assert.equal(restView.kind, 'rest');
+  assert.ok(Math.abs(restView.point.lat - result.events[restIndex].fromPoint.lat) < 1e-9);
+});
+
+test('an invalid index shows an error and no stage, keeping the plan', async () => {
+  const { controller, result } = await plannedLongRoute();
+  for (const index of [-1, result.events.length, 1.5, '0']) {
+    const outcome = controller.selectScheduleStage(index);
+    assert.equal(outcome.selected, false);
+    assert.equal(controller.getState().stage.selection, null);
+    assert.equal(scheduleStageOverlay(controller.getState()), null);
+  }
+  assert.ok(controller.getState().result);
+  const empty = makeController();
+  assert.equal(empty.selectScheduleStage(0).selected, false);
+});
+
+test('every invalidation, replan, import or clear removes the chosen stage', async () => {
+  const source = makeController();
+  longRoute(source);
+  const { text } = source.exportDraft();
+  for (const change of [
+    c => c.setBreakStyle('15+30'),
+    c => c.dragPoint(1, { lat: 0, lon: 5.9 }),
+    c => c.setRoadType(0, 'motorway'),
+    c => c.setChoice('section-1', { useExtension: true, dailyRest: 'reduced' }),
+    c => c.setDeparture({ mode: 'relative', hours: 1, minutes: 0 }),
+    c => c.setDeparture({ mode: 'absolute', date: '2026-11-02', time: '08:00', fold: null }),
+    c => c.chooseNoHistory(),
+    c => c.loadInitialHistory(() => null),
+    c => c.importDraftText(text),
+    c => c.clear(),
+    c => c.plan()
+  ]) {
+    const { controller, result } = await plannedLongRoute();
+    controller.loadInitialHistory(() => null);
+    await controller.plan();
+    controller.selectScheduleStage(result.events.findIndex(event => event.type === 'drive'));
+    assert.ok(controller.getState().stage.selection);
+    await change(controller);
+    assert.equal(controller.getState().stage.selection, null, String(change));
+    assert.equal(scheduleStageOverlay(controller.getState()), null);
+  }
+});
+
+test('a pending plan clears the stage at once and the new result does not inherit the old index', async () => {
+  const gate = deferred();
+  let slow = false;
+  const { controller, result } = await plannedLongRoute({
+    adapter: async request => { if (slow) await gate.promise; return createMapPlan(request, dependencies); }
+  });
+  const index = result.events.findIndex(event => event.type === 'drive');
+  controller.selectScheduleStage(index);
+  slow = true;
+  const pending = controller.plan();
+  assert.equal(controller.getState().stage.selection, null, 'cleared when the replan starts');
+  gate.resolve();
+  await pending;
+  const fresh = controller.getState();
+  assert.notEqual(fresh.result, result);
+  assert.equal(fresh.stage.selection, null, 'the same index in the new plan is not selected');
+  controller.selectScheduleStage(index);
+  assert.equal(controller.getState().stage.selection.result, fresh.result, 'a new explicit choice binds to the new plan');
+});
+
+test('a stage selection made before a pending input change cannot come back afterwards', async () => {
+  const gate = deferred();
+  const { controller, restIndex } = await plannedLongRoute({
+    evaluateParking: async request => { await gate.promise; return evaluateParkingCandidates(request); }
+  });
+  controller.loadParkingText(parkingText(parkingRecord('p1', 2)));
+  controller.selectRestForParking(restIndex, 20);
+  controller.selectScheduleStage(restIndex);
+  const pending = controller.evaluateParking();
+  controller.setBreakStyle('15+30');
+  gate.resolve();
+  await pending;
+  assert.equal(controller.getState().stage.selection, null);
+  assert.equal(controller.getState().parking.items, null);
+});
+
+test('stage and parking window: the stage takes the highlight; the parking actions take it back without losing parking data', async () => {
+  const { controller, restIndex } = await plannedLongRoute();
+  controller.loadParkingText(parkingText(parkingRecord('p1', 2.1)));
+  controller.selectRestForParking(restIndex, 20);
+  await controller.evaluateParking();
+  const parkingBefore = controller.getState().parking;
+  controller.selectScheduleStage(0);
+  const withStage = controller.getState();
+  assert.ok(scheduleStageOverlay(withStage));
+  assert.ok(parkingWindowOverlay(withStage), 'the parking window is kept underneath');
+  assert.equal(withStage.parking.result, parkingBefore.result, 'parking evaluation kept');
+  assert.equal(withStage.parking.restWindow.maxOffsetM, parkingBefore.restWindow.maxOffsetM);
+  await controller.evaluateParking();
+  assert.ok(controller.getState().stage.selection, 'evaluating parkings keeps the chosen stage');
+  controller.clearScheduleStage();
+  const cleared = controller.getState();
+  assert.equal(cleared.stage.selection, null);
+  assert.ok(parkingWindowOverlay(cleared));
+  assert.ok(cleared.parking.result);
+  assert.equal(cleared.result, withStage.result);
+  controller.selectScheduleStage(0);
+  controller.selectRestForParking(restIndex, 10);
+  assert.equal(controller.getState().stage.selection, null, 'choosing a parking window takes the highlight back');
+});
+
+test('the draft export stays the same 8 fields in v1 and v2 with a stage chosen', async () => {
+  for (const departure of [{ mode: 'relative', hours: 1, minutes: 0 }, { mode: 'absolute', date: '2026-11-02', time: '08:00', fold: null }]) {
+    const controller = makeController();
+    longRoute(controller);
+    controller.setDeparture(departure);
+    await controller.plan();
+    controller.selectScheduleStage(0);
+    assert.ok(controller.getState().stage.selection);
+    const text = controller.exportDraft().text;
+    assert.deepEqual(Object.keys(JSON.parse(text)), ['format', 'version', 'exportedAtUtcMs', 'points', 'roadTypes', 'choices', 'departure', 'breakStyle']);
+    for (const word of ['stage', 'eventIndex', 'selection', 'Каране']) assert.ok(!text.includes(word), word);
+  }
+});
+
+test('stages planned at the two autumn 03:30 times show different offsets', async () => {
+  const lines = [];
+  for (const fold of ['earlier', 'later']) {
+    const controller = makeController();
+    longRoute(controller);
+    controller.setDeparture({ mode: 'absolute', date: '2026-10-25', time: '03:30', fold });
+    await controller.plan();
+    controller.selectScheduleStage(0);
+    lines.push(scheduleStageOverlay(controller.getState()).lines[1]);
+  }
+  assert.match(lines[0], /^Начало: 25\.10\.2026 г\., 03:30 \(UTC\+03:00\)/);
+  assert.match(lines[1], /^Начало: 25\.10\.2026 г\., 03:30 \(UTC\+02:00\)/);
+});
+
+test('a storage clear of the loaded history removes the chosen stage with the plan', async () => {
+  const activities = JSON.stringify([{ type: 'rest', start: fixedNow - 12 * 3_600_000, end: fixedNow - 3_600_000 }]);
+  const controller = createMapPlannerController({ now: () => fixedNow });
+  controller.loadInitialHistory(key => (key === 'th_activities' ? activities : null));
+  longRoute(controller);
+  await controller.plan();
+  controller.selectScheduleStage(0);
+  assert.ok(controller.getState().stage.selection);
+  assert.equal(controller.storageChanged(null), true);
+  assert.equal(controller.getState().stage.selection, null);
+  assert.equal(controller.getState().result, null);
+});
+
+test('selecting and clearing stages never mutates the plan object', async () => {
+  const { controller, result } = await plannedLongRoute();
+  const snapshot = JSON.stringify(result);
+  for (let i = 0; i < result.events.length; i++) controller.selectScheduleStage(i);
+  controller.clearScheduleStage();
+  controller.clearScheduleStage();
+  assert.equal(JSON.stringify(controller.getState().result), snapshot);
+  assert.equal(controller.getState().result, result);
+  assert.equal(controller.getState().stage.selection, null);
+});
+
+test('an old stage error is cleared by an input change and by a new plan', async () => {
+  const { controller, result } = await plannedLongRoute();
+  controller.selectScheduleStage(result.events.length);
+  assert.ok(controller.getState().stage.error);
+  controller.setBreakStyle('15+30');
+  assert.equal(controller.getState().stage.error, null);
+  await controller.plan();
+  controller.selectScheduleStage(-1);
+  assert.ok(controller.getState().stage.error);
+  await controller.plan();
+  assert.equal(controller.getState().stage.error, null);
 });
