@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import event
 
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://taho:taho@127.0.0.1:5432/taho_test")
@@ -24,7 +25,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main, security  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
-from app.models import AuthToken, Company, User  # noqa: E402
+from app.models import AuthToken, Company, Invite, User  # noqa: E402
 
 H = 3600_000
 DAY = 24 * H
@@ -38,7 +39,9 @@ def client(monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     main.login_throttle.hits.clear()
-    main.join_throttle.hits.clear()
+    with main.join_lock:
+        main.join_throttle.hits.clear()
+        main.join_aggregate_throttle.hits.clear()
     with main.route_options_lock:
         main.route_options_throttle.hits.clear()
     monkeypatch.setenv("REGISTRATION_CODE", TEST_REGISTRATION_CODE)
@@ -68,6 +71,14 @@ def join(c, code):
     r = c.post("/api/join", json={"code": code, "device": "тест"})
     assert r.status_code == 200, r.text
     return r.json()["token"]
+
+
+def join_key(code, ip="testclient"):
+    return f"{ip}|{main.fingerprint(main.normalize_code(code))}"
+
+
+def join_aggregate_key(ip="testclient"):
+    return f"{ip}|"
 
 
 def route_options(c, token):
@@ -311,6 +322,150 @@ def test_new_invite_cancels_old_code(client):
     out = add_driver(client, boss)
     client.post(f"/api/drivers/{out['driver']['id']}/invite", headers=auth(boss))
     assert client.post("/api/join", json={"code": out["invite"]["code"]}).status_code == 404
+
+
+def test_join_limits_ten_lookups_per_ip_and_code_without_partial_reservation(client, monkeypatch):
+    code = "bad-join-code"
+    for _ in range(10):
+        assert client.post("/api/join", json={"code": code}).status_code == 404
+
+    key = join_key(code)
+    aggregate_key = join_aggregate_key()
+    monkeypatch.setattr(main, "select", lambda *_args, **_kwargs: pytest.fail("unexpected DB lookup"))
+    assert client.post("/api/join", json={"code": code}).status_code == 429
+    assert len(main.join_throttle.hits[key]) == 10
+    assert len(main.join_aggregate_throttle.hits[aggregate_key]) == 10
+    assert code not in str(main.join_throttle.hits)
+
+
+def test_different_valid_code_works_after_ten_bad_codes_from_same_ip(client):
+    boss = register(client)
+    invite = add_driver(client, boss)["invite"]["code"]
+    for _ in range(10):
+        assert client.post("/api/join", json={"code": "wrong-invite"}).status_code == 404
+
+    assert client.post("/api/join", json={"code": invite}).status_code == 200
+    assert len(main.join_throttle.hits[join_key(invite)]) == 1
+    assert len(main.join_aggregate_throttle.hits[join_aggregate_key()]) == 11
+
+
+def test_join_aggregate_limits_one_hundred_codes_before_database_lookup(client, monkeypatch):
+    for i in range(100):
+        code = f"bad-{i:05d}"
+        assert client.post("/api/join", json={"code": code}).status_code == 404
+
+    blocked_code = "fresh-code"
+    monkeypatch.setattr(main, "select", lambda *_args, **_kwargs: pytest.fail("unexpected DB lookup"))
+    assert client.post("/api/join", json={"code": blocked_code}).status_code == 429
+    assert len(main.join_aggregate_throttle.hits[join_aggregate_key()]) == 100
+    assert not main.join_throttle.hits[join_key(blocked_code)]
+
+
+def test_normalized_join_code_aliases_share_a_budget(client):
+    for i in range(10):
+        code = "ab-cd" if i % 2 else "A B C D"
+        assert client.post("/api/join", json={"code": code}).status_code == 404
+
+    assert client.post("/api/join", json={"code": "ABCD"}).status_code == 429
+    assert len(main.join_throttle.hits[join_key("a-b c d")]) == 10
+
+
+def test_same_code_has_an_independent_budget_for_another_ip(client):
+    code = "missing-invite"
+    for _ in range(10):
+        assert client.post("/api/join", json={"code": code}).status_code == 404
+
+    other = TestClient(main.app, client=("198.51.100.42", 12345))
+    with other:
+        assert other.post("/api/join", json={"code": code}).status_code == 404
+    assert len(main.join_throttle.hits[join_key(code)]) == 10
+    assert len(main.join_throttle.hits[join_key(code, "198.51.100.42")]) == 1
+    assert len(main.join_aggregate_throttle.hits[join_aggregate_key("198.51.100.42")]) == 1
+
+
+def test_successful_and_used_invite_lookups_keep_spending_both_budgets(client):
+    boss = register(client)
+    code = add_driver(client, boss)["invite"]["code"]
+    assert client.post("/api/join", json={"code": code}).status_code == 200
+    assert client.post("/api/join", json={"code": code}).status_code == 404
+    assert len(main.join_throttle.hits[join_key(code)]) == 2
+    assert len(main.join_aggregate_throttle.hits[join_aggregate_key()]) == 2
+
+
+@pytest.mark.parametrize("state", ["inactive", "used", "expired"])
+def test_rejected_invite_states_spend_both_join_budgets(client, state):
+    boss = register(client)
+    out = add_driver(client, boss)
+    code = out["invite"]["code"]
+    with SessionLocal() as db:
+        invite = db.query(Invite).one()
+        if state == "inactive":
+            db.get(User, out["driver"]["id"]).active = False
+        elif state == "used":
+            invite.used_at = NOW
+        else:
+            invite.expires_at = NOW - 1
+        db.commit()
+
+    assert client.post("/api/join", json={"code": code}).status_code == 404
+    assert len(main.join_throttle.hits[join_key(code)]) == 1
+    assert len(main.join_aggregate_throttle.hits[join_aggregate_key()]) == 1
+
+
+@pytest.mark.parametrize(("elapsed", "blocked"), [
+    (899.999, True),
+    (900, False),
+    (900.001, False),
+])
+def test_join_budget_window_boundary(elapsed, blocked, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(security.time, "time", lambda: clock[0])
+    ip = f"window-check-{elapsed}"
+    key, aggregate_key = join_key("window-check", ip), join_aggregate_key(ip)
+    with main.join_lock:
+        main.join_throttle.reset(key)
+        main.join_aggregate_throttle.reset(aggregate_key)
+    for _ in range(10):
+        main.join_throttle.fail(key)
+    for _ in range(100):
+        main.join_aggregate_throttle.fail(aggregate_key)
+    clock[0] += elapsed
+
+    assert main.join_throttle.blocked(key) is blocked
+    assert main.join_aggregate_throttle.blocked(aggregate_key) is blocked
+    with main.join_lock:
+        main.join_throttle.reset(key)
+        main.join_aggregate_throttle.reset(aggregate_key)
+
+
+def test_join_lock_is_released_before_database_lookup(client):
+    acquired_during_query = []
+
+    def check_lock_released(_conn, _cursor, _statement, _parameters, _context, _executemany):
+        acquired = main.join_lock.acquire(blocking=False)
+        acquired_during_query.append(acquired)
+        if acquired:
+            main.join_lock.release()
+
+    event.listen(engine, "before_cursor_execute", check_lock_released)
+    try:
+        assert client.post("/api/join", json={"code": "missing-invite"}).status_code == 404
+    finally:
+        event.remove(engine, "before_cursor_execute", check_lock_released)
+    assert acquired_during_query and all(acquired_during_query)
+
+
+def test_concurrent_same_code_requests_reserve_no_more_than_ten_lookups(client):
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        statuses = list(pool.map(
+            lambda _index: client.post("/api/join", json={"code": "parallel-missing"}).status_code,
+            range(20),
+        ))
+
+    assert statuses.count(404) == 10
+    assert statuses.count(429) == 10
+    assert len(main.join_throttle.hits[join_key("parallel-missing")]) == 10
+    assert len(main.join_aggregate_throttle.hits[join_aggregate_key()]) == 10
 
 
 def test_roles_are_separate(client):
