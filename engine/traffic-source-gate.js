@@ -14,6 +14,31 @@ export function validateTrafficExchangeWithSourceHealth(request,response,options
   const contract=validateTrafficExchange(request,response,{activeRequest});
   const sourceHealth=evaluateTrafficSourceHealth(envelope?{evaluatedAt:options.evaluatedAt,sources:options.sources}:null);
   const errors=[...contract.errors];
+  const maxExchangeAgeMs=envelope?options.maxExchangeAgeMs:undefined;
+  const maxAgeValid=Number.isSafeInteger(maxExchangeAgeMs)&&maxExchangeAgeMs>0;
+  const clockValid=Number.isSafeInteger(envelope?options.evaluatedAt:undefined)&&options.evaluatedAt>=0;
+  const rawResponseAt=object(response)?response.evaluatedAt:undefined;
+  const isoValid=typeof rawResponseAt==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(rawResponseAt);
+  const parsedResponseAt=isoValid?Date.parse(rawResponseAt):NaN;
+  const responseTimeValid=isoValid&&Number.isSafeInteger(parsedResponseAt)&&parsedResponseAt>=0;
+  const ageMs=clockValid&&responseTimeValid?options.evaluatedAt-parsedResponseAt:null;
+  let exchangeState='invalid-input',exchangeReason='INVALID_TEMPORAL_INPUT';
+  if(!maxAgeValid)errors.push({code:'EXCHANGE_INVALID_MAX_AGE',path:'options.maxExchangeAgeMs'});
+  if(!clockValid)errors.push({code:'EXCHANGE_INVALID_EVALUATED_AT',path:'options.evaluatedAt'});
+  if(!responseTimeValid)errors.push({code:'EXCHANGE_INVALID_RESPONSE_TIME',path:'response.evaluatedAt'});
+  if(maxAgeValid&&clockValid&&responseTimeValid){
+    if(ageMs<0){
+      exchangeState='future';exchangeReason='FUTURE_RESPONSE';
+      errors.push({code:'EXCHANGE_FUTURE_RESPONSE',path:'response.evaluatedAt'});
+    }else if(ageMs>=maxExchangeAgeMs){
+      exchangeState='stale';exchangeReason='STALE_RESPONSE';
+      errors.push({code:'EXCHANGE_STALE_RESPONSE',path:'response.evaluatedAt'});
+    }else{
+      exchangeState='fresh';exchangeReason='WITHIN_EXPLICIT_MAX_AGE';
+    }
+  }
+  const exchangeHealth={state:exchangeState,reason:exchangeReason,ageMs,maxExchangeAgeMs:maxAgeValid?maxExchangeAgeMs:null,responseAtMs:responseTimeValid?parsedResponseAt:null};
+
   const citations=[];
   const cite=(source,path)=>{
     if(!object(source))return;
@@ -65,5 +90,5 @@ export function validateTrafficExchangeWithSourceHealth(request,response,options
     if(reason)errors.push({code:'SOURCE_HEALTH_'+reason,path:citation.path});
   }
   if(sourceHealth.status==='invalid-input')errors.push({code:'SOURCE_HEALTH_INVALID_INPUT',path:'options'});
-  return {valid:errors.length===0,errors,warnings:contract.warnings,sourceHealth,sourceDiagnostics,sourceIds:[...new Set(citations.map(x=>x.sourceId).filter(id))]};
+  return {valid:errors.length===0,errors,warnings:contract.warnings,exchangeHealth,sourceHealth,sourceDiagnostics,sourceIds:[...new Set(citations.map(x=>x.sourceId).filter(id))]};
 }
