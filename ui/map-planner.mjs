@@ -3,6 +3,7 @@ import { buildPlan } from '../engine/plan.js';
 import { indexRoute, pointAtOffset } from '../engine/route-position.js';
 import { evaluateParkingCandidates } from '../engine/parking-candidates.js';
 import { loadPlannerInitialState } from './planner-initial-state.mjs';
+import { createDraft, draftFileName, parseDraftText, readDraftFile } from './planner-draft.mjs';
 import {
   describeParkingResults, parkingItemNode, parkingSummaryText, parkingTooltipNode, parseParkingText,
   readParkingFile, validateParkingWindow, windowInMeters
@@ -32,6 +33,8 @@ export function createMapPlannerController({
   let error = null;
   let departure = { mode: 'now', hours: 0, minutes: 0 };
   let breakStyle = '45';
+  // Draft file loads: a newer load, clear or route edit makes an older read stale.
+  const draft = { mode: 'idle', fileName: null, error: null, token: 0 };
   let history = { mode: 'unselected', snapshot: null, summary: null, error: null };
   // The imported list survives route edits; any evaluation result does not.
   const parking = {
@@ -49,6 +52,7 @@ export function createMapPlannerController({
     inputRevision,
     departure: { ...departure },
     breakStyle,
+    draft: { mode: draft.mode, fileName: draft.fileName, error: draft.error },
     history: clone(history),
     result,
     error,
@@ -73,7 +77,13 @@ export function createMapPlannerController({
     parking.items = null;
   };
   const invalidate = routeChanged => {
-    if (routeChanged) routeRevision++;
+    if (routeChanged) {
+      routeRevision++;
+      if (draft.mode === 'loading') {
+        draft.token++;
+        draft.mode = 'idle';
+      }
+    }
     inputRevision++;
     activeRequestId = null;
     result = null;
@@ -232,8 +242,70 @@ export function createMapPlannerController({
     return { accepted: true, result: evaluated };
   }
 
+  // The whole draft is already validated; every field is replaced at once.
+  function applyDraft(loaded, fileName) {
+    points.length = 0;
+    points.push(...loaded.points.map(point => ({ lat: point.lat, lon: point.lon })));
+    roadTypes.length = 0;
+    roadTypes.push(...loaded.roadTypes);
+    for (const key of Object.keys(choices)) delete choices[key];
+    Object.assign(choices, clone(loaded.choices));
+    departure = { ...loaded.departure };
+    breakStyle = loaded.breakStyle;
+    // The log is never taken from a file: choose it again for this draft.
+    history = { mode: 'unselected', snapshot: null, summary: null, error: null };
+    draft.mode = 'loaded';
+    draft.fileName = fileName;
+    draft.error = null;
+    invalidate(true);
+  }
+  const failDraft = caught => {
+    draft.mode = 'error';
+    draft.fileName = null;
+    draft.error = (caught instanceof Error && caught.message) || 'Подготовката не може да бъде заредена.';
+    notify();
+    return { loaded: false, error: draft.error };
+  };
+
   return {
     getState: snapshot,
+    exportDraft() {
+      const exportedAtUtcMs = now();
+      if (!Number.isSafeInteger(exportedAtUtcMs) || exportedAtUtcMs < 0) {
+        throw new Error('Не може да се определи текущият час.');
+      }
+      return {
+        text: createDraft({ points, roadTypes, choices, departure, breakStyle }, exportedAtUtcMs),
+        fileName: draftFileName(exportedAtUtcMs)
+      };
+    },
+    importDraftText(text, fileName = null) {
+      draft.token++;
+      let loaded;
+      try {
+        loaded = parseDraftText(text);
+      } catch (caught) {
+        return failDraft(caught);
+      }
+      applyDraft(loaded, fileName);
+      return { loaded: true };
+    },
+    async importDraftFile(file) {
+      const token = ++draft.token;
+      draft.mode = 'loading';
+      draft.error = null;
+      notify();
+      let loaded;
+      try {
+        loaded = await readDraftFile(file);
+      } catch (caught) {
+        if (token !== draft.token) return { loaded: false, stale: true };
+        return failDraft(caught);
+      }
+      if (token !== draft.token) return { loaded: false, stale: true };
+      applyDraft(loaded, typeof file.name === 'string' ? file.name : null);
+      return { loaded: true };
+    },
     loadParkingText(text, fileName = null) {
       parking.loadToken++;
       dropParkingResult();
@@ -352,6 +424,11 @@ export function createMapPlannerController({
       return true;
     },
     clear() {
+      if (draft.mode === 'loading') {
+        draft.token++;
+        draft.mode = 'idle';
+        notify();
+      }
       if (!points.length && !Object.keys(choices).length && !result) return;
       points.length = 0;
       roadTypes.length = 0;
@@ -632,8 +709,12 @@ function renderPlanner(state, map, layers, controller) {
   }
   renderParking(state.parking);
 
-  $('relative-inputs').hidden = $('departure-mode').value !== 'relative';
+  $('departure-mode').value = state.departure.mode;
+  $('departure-hours').value = String(state.departure.hours);
+  $('departure-minutes').value = String(state.departure.minutes);
+  $('relative-inputs').hidden = state.departure.mode !== 'relative';
   $('break-style').value = state.breakStyle;
+  renderDraft(state.draft);
   const historyStatus = $('history-status');
   if (state.history.mode === 'loaded') {
     const summary = state.history.summary;
@@ -660,6 +741,18 @@ function renderPlanner(state, map, layers, controller) {
     ? 'Добави поне две точки върху картата.' : '');
   $('plan').disabled = state.points.length < 2 || !['loaded', 'none'].includes(state.history.mode);
   renderSchedule(state.result);
+}
+
+function renderDraft(draft) {
+  const status = document.getElementById('draft-status');
+  if (draft.mode === 'loading') {
+    status.textContent = 'Зареждане на подготовката…';
+  } else if (draft.mode === 'error') {
+    status.textContent = `${draft.error} Текущата подготовка не е променена.`;
+  } else if (draft.mode === 'loaded') {
+    const name = draft.fileName ? ` от „${draft.fileName}“` : '';
+    status.textContent = `Заредена подготовка${name}. Избери отново дневника от устройството или „Продължи без начална история“, после натисни „Планирай“.`;
+  }
 }
 
 const parkingFileText = {
@@ -751,6 +844,25 @@ if (typeof document !== 'undefined') {
         minutes: Number(document.getElementById('departure-minutes').value)
       }));
   }
+  document.getElementById('draft-save').addEventListener('click', () => {
+    try {
+      const { text, fileName } = controller.exportDraft();
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      document.getElementById('draft-status').textContent = `Подготовката е записана във файл „${fileName}“ на това устройство.`;
+    } catch (caught) {
+      document.getElementById('draft-status').textContent = caught instanceof Error ? caught.message : 'Подготовката не може да бъде записана.';
+    }
+  });
+  document.getElementById('draft-file').addEventListener('change', event => {
+    const [file] = event.target.files;
+    event.target.value = '';
+    if (file) controller.importDraftFile(file);
+  });
   document.getElementById('break-style').addEventListener('change', event =>
     controller.setBreakStyle(event.target.value));
   document.getElementById('plan').addEventListener('click', () => controller.plan());
