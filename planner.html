@@ -21,6 +21,7 @@
       <p>Натисни върху картата за подредени точки. Премести маркер с плъзгане, за да редактираш линия. Нужни са поне две различни валидни точки.</p>
       <div class="mode">Ръчна скица — пътищата не са проверени</div>
       <div id="map" role="application" aria-label="Карта за ръчно чертане на маршрут"></div>
+      <p id="map-window-caption" class="notice" aria-live="polite" hidden></p>
       <div class="controls">
         <button id="remove-last" type="button">Премахни последната точка</button>
         <button id="clear-route" class="secondary" type="button">Изчисти маршрута</button>
@@ -89,6 +90,9 @@
         <input id="rest-lookback-km" type="number" min="0.1" max="200" step="1" value="20" inputmode="decimal"></label>
       <p class="notice">„Прегледай паркинги преди тази пауза“ в графика задава участъка по линията до паузата (по подразбиране 20 км назад). Това е само удобство за преглед: паркингът, подходът, достъпът, достижимостта и наличността не са потвърдени, нищо не се резервира и графикът не се променя спрямо паркинга.</p>
       <p id="parking-rest" class="muted" aria-live="polite"></p>
+      <div class="controls">
+        <button id="parking-window-show" class="secondary" type="button" disabled>Покажи избрания участък на картата</button>
+      </div>
       <div class="controls">
         <button id="parking-evaluate" type="button" disabled>Оцени паркингите по маршрута</button>
         <button id="parking-clear" class="secondary" type="button" disabled>Изчисти списъка с паркинги</button>
