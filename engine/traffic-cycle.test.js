@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createTrafficCycle} from './traffic-cycle.js';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+const scenarioText=readFileSync(fileURLToPath(new URL('../docs/traffic-intelligence/SCENARIOS-v0.1.md',import.meta.url)),'utf8');
+const fullExamples=[...scenarioText.matchAll(/```json\\n([\\s\\S]*?)\\n```/g)].slice(0,12).map(m=>JSON.parse(m[1]));
 const clone=x=>structuredClone(x);
 const setup=(opts={})=>{
  const requests=[],plans=[],responses=[];
@@ -50,3 +54,30 @@ for(const [name,opts,status] of [
  ['invalid_exchange',{validate:()=>({valid:false,errors:[]})},'invalid_exchange'],
  ['callback_error',{evaluate:()=>{throw Error('offline')}},'callback_error']
 ])test('terminal snapshot '+name,async()=>{const x=setup(opts);assert.equal((await x.ctrl.run(x.args)).status,status);assert.equal(x.ctrl.snapshot().status,status)});
+
+const integration=(index,{deltas=[0],open=false}={})=>{
+ const originalRequest=clone(fullExamples[2*(index-1)]),originalResponse=clone(fullExamples[2*(index-1)+1]);
+ const initialPlan={etaMs:1000000,passability:[open?'open':originalResponse.segments[0].passability],segments:clone(originalRequest.segments)};
+ let calls=0;
+ const evaluate=async request=>{
+   calls++;
+   const response=clone(originalResponse);
+   for(const field of ['requestId','routeRevision','evaluationCycle','inputRevision','attempt'])response[field]=request[field];
+   response.segments.forEach((segment,i)=>segment.expectedEntryAt=request.segments[i].expectedEntryAt);
+   if(open){
+     const segment=response.segments[0];segment.passability='open';
+     segment.provenance.push({...segment.selected.source,kind:'passability_open',direction:request.segments[0].direction,vehicleProfileRef:request.vehicleProfileRef,validFrom:'2026-10-19T08:00:00Z',validTo:'2026-10-19T10:00:00Z'});
+   }
+   return response;
+ };
+ const createRequest=async ({cycle,routeRevision,attempt,inputRevision,requestId,plan})=>({...clone(originalRequest),evaluationCycle:cycle,routeRevision,attempt,inputRevision,requestId,segments:clone(plan.segments)});
+ const plan=async ({previousPlan,attempt})=>({...clone(previousPlan),etaMs:previousPlan.etaMs+(deltas[attempt-1]??120000),passability:[open?'open':originalResponse.segments[0].passability]});
+ const ctrl=createTrafficCycle({evaluate,createRequest,plan}); // default ACCEPTED validator
+ const args={cycle:'cycle-real',routeRevision:originalRequest.routeRevision,initialPlan,requestIds:['real-1','real-2','real-3'],inputRevisions:['real-in-1','real-in-2','real-in-3']};
+ return {ctrl,args,get calls(){return calls}};
+};
+test('default validator accepted complete example 1 is limited unknown',async()=>{const x=integration(1);assert.equal((await x.ctrl.run(x.args)).status,'limited');assert.equal(x.calls,1)});
+test('default validator accepted complete example 4 is closed/unavailable',async()=>{const x=integration(4);assert.equal((await x.ctrl.run(x.args)).status,'unavailable');assert.equal(x.calls,1)});
+test('default validator accepted complete example 5 is limited uncovered',async()=>{const x=integration(5);assert.equal((await x.ctrl.run(x.args)).status,'limited')});
+test('default validator full example 1 with explicit open provenance converges',async()=>{const x=integration(1,{open:true,deltas:[60000]});const out=await x.ctrl.run(x.args);assert.equal(out.status,'converged',JSON.stringify(out));assert.equal(out.attempts,1)});
+test('default validator full example 1 with explicit open provenance max three',async()=>{const x=integration(1,{open:true,deltas:[120000,120000,120000]});const out=await x.ctrl.run(x.args);assert.equal(out.status,'unstable_estimate',JSON.stringify(out));assert.equal(x.calls,3)});
