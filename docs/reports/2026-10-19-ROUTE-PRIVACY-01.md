@@ -1,9 +1,9 @@
-# ROUTE-PRIVACY-01 — начална етапна записка
+# ROUTE-PRIVACY-01 — етапна записка
 
-Подготвено от Codex,19.10.2026 около16:28 Europe/Sofia. Task#84. Това е работен контекст за Copilot, не готова поправка.
+Прието от Copilot в отделния checkout на PR#85,19.10.2026. Task#84.
 
-Base е приетият REG-01 8aa906ff0c9d8da34085fd299f7c3f2984c20520,43baseline PostgreSQL теста потвърдени от изолирания INT12CI със същите server blobs. Отделният клон codex/route-privacy-01-handoff и Draft PR към codex/reg-01-handoff пазят приетия REG branch. Codex добавя само този разрешен отчет.
+Checkout receipt: `codex/route-privacy-01-handoff`, target `codex/reg-01-handoff`, начален HEAD `6eb6691fa81e2d255c8c5de7227cb3278d00a198`. Base е приетият REG-01 `8aa906ff0c9d8da34085fd299f7c3f2984c20520`; този PR пази приетия branch отделно. Собствена оценка: 1–2 часа, не гаранция.
 
-Само main.py/test_api.py/server README/този report. Цел: премахване на неявния public demo routing default; без изрично валиден VALHALLA_URL endpointът връща503 преди outbound request. Пълни критерии в#84. Не се променят истински env/credentials/услуги.
+Променени са само разрешените четири файла: `server/app/main.py`, `server/tests/test_api.py`, `server/README.md` и този отчет. Валидира се изричен абсолютен HTTP(S) `VALHALLA_URL`; при липса или невалидна стойност endpoint-ът връща 503 преди outbound request. Няма fallback към demo или друг host. HTTP(S) base path се запазва, trailing slash се премахва и `/route` се добавя. Не са променяни истински env/credentials/услуги.
 
-Runtime още не е променен, няма нови тестове или твърдение за готовност. Copilot потвърждава checkout receipt и собствена оценка, после попълва действителни base/head/файлове/проверки/ограничения/блокери. Оценка1–2ч, не гаранция, контрол17:30/новартефакт. Безmerge/deploy. M3 и M4b остават отделно.
+Проверки: `server/tests/test_api.py` срещу изолиран PostgreSQL 16 — 60 passed (43 съществуващи и 17 нови параметризирани проверки); `python -m py_compile server/app/main.py server/tests/test_api.py`, `git diff --check` и `docker build -f server/Dockerfile -t route-privacy-01-server-test .` — успешни. Pytest показва едно предупреждение за deprecated `httpx` интеграция в Starlette. Няма проверка към реален Valhalla endpoint/мрежа и няма CI run от този branch. Непокрито от този пакет: `costing=truck` не удостоверява реални размери/ADR/тегло; M4b vehicle profile/rate limiting и M3 join throttle остават отделни. Без merge/deploy.

@@ -3,9 +3,11 @@
 Пускане (от папка server):
     TEST_DATABASE_URL=postgresql+psycopg://taho:taho@127.0.0.1:5432/taho_test pytest -q
 """
+import json
 import os
 import sys
 import time
+from urllib.error import HTTPError
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -472,3 +474,130 @@ def test_code_typed_with_cyrillic_letters(client):
 def test_oversized_body_rejected(client):
     r = client.post("/api/owner/login", content=b"x" * 10, headers={"Content-Length": str(6 * 1024 * 1024), "Content-Type": "application/json"})
     assert r.status_code == 413
+
+
+@pytest.mark.parametrize("configured", [
+    None, "", " \t\n", "/router", "https:///route", "ftp://router.example",
+    "https://" + ":".join(("test-user", "test-password")) + "@router.example",
+    "https://router.example/path?key=value",
+    "https://router.example/path#fragment", "https://router.example:notaport",
+    "https://router.example:65536", "https://router.example:",
+])
+def test_route_options_rejects_missing_or_invalid_router_without_egress(
+        client, monkeypatch, configured):
+    token = register(client)
+    if configured is None:
+        monkeypatch.delenv("VALHALLA_URL", raising=False)
+    else:
+        monkeypatch.setenv("VALHALLA_URL", configured)
+    calls = []
+    monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    response = client.post("/api/route-options", json={
+        "origin": {"lat": 42.7, "lon": 23.3},
+        "destination": {"lat": 43.2, "lon": 27.9},
+    }, headers=auth(token))
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Маршрутизаторът не е активиран"
+    assert not calls
+
+
+@pytest.mark.parametrize(("configured", "expected_url"), [
+    ("  https://router.example/base///  ", "https://router.example/base/route"),
+    ("http://127.0.0.1:8000/valhalla/", "http://127.0.0.1:8000/valhalla/route"),
+])
+def test_route_options_uses_explicit_router_and_bounded_payload(
+        client, monkeypatch, configured, expected_url):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", configured)
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            assert limit == 5 * 1024 * 1024
+            return b'{"trip":{"status":0}}'
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return Response()
+
+    monkeypatch.setattr(main, "urlopen", fake_urlopen)
+    response = client.post("/api/route-options", json={
+        "origin": {"lat": 42.7, "lon": 23.3},
+        "destination": {"lat": 43.2, "lon": 27.9},
+    }, headers=auth(token))
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    request, timeout = calls[0]
+    assert request.full_url == expected_url
+    assert request.get_method() == "POST"
+    assert timeout == 25
+    assert json.loads(request.data) == {
+        "locations": [{"lat": 42.7, "lon": 23.3}, {"lat": 43.2, "lon": 27.9}],
+        "costing": "truck",
+        "units": "kilometers",
+        "alternates": 2,
+    }
+
+
+@pytest.mark.parametrize(("failure", "status"), [
+    ("upstream", 503),
+    ("invalid-response", 502),
+])
+def test_route_options_upstream_failures_do_not_fallback(
+        client, monkeypatch, failure, status):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example/base")
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b"{}"
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if failure == "upstream":
+            raise HTTPError(request.full_url, 503, "synthetic", None, None)
+        return Response()
+
+    monkeypatch.setattr(main, "urlopen", fake_urlopen)
+    response = client.post("/api/route-options", json={
+        "origin": {"lat": 42.7, "lon": 23.3},
+        "destination": {"lat": 43.2, "lon": 27.9},
+    }, headers=auth(token))
+
+    assert response.status_code == status
+    assert calls == ["https://synthetic-router.example/base/route"]
+
+
+def test_route_options_remains_owner_only(client, monkeypatch):
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    body = {
+        "origin": {"lat": 42.7, "lon": 23.3},
+        "destination": {"lat": 43.2, "lon": 27.9},
+    }
+    anonymous = client.post("/api/route-options", json=body)
+    boss = register(client)
+    driver = join(client, add_driver(client, boss)["invite"]["code"])
+    driver_response = client.post("/api/route-options", json=body, headers=auth(driver))
+
+    assert anonymous.status_code == 401
+    assert driver_response.status_code == 403
+    assert not calls
