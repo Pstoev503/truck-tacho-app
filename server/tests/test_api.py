@@ -20,20 +20,22 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
-from app.models import AuthToken  # noqa: E402
+from app.models import AuthToken, Company, User  # noqa: E402
 
 H = 3600_000
 DAY = 24 * H
 NOW = int(time.time() * 1000)
 T0 = NOW - 2 * DAY  # записите в тестовете са от преди 2 дни
+TEST_REGISTRATION_CODE = "synthetic-test-registration-code"
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     main.login_throttle.hits.clear()
     main.join_throttle.hits.clear()
+    monkeypatch.setenv("REGISTRATION_CODE", TEST_REGISTRATION_CODE)
     with TestClient(main.app) as c:
         yield c
 
@@ -43,7 +45,9 @@ def auth(token):
 
 
 def register(c, email="shef@firma.bg"):
-    r = c.post("/api/owner/register", json={"company": "Транс ЕООД", "name": "Иван", "email": email, "password": "тайна-парола"})
+    r = c.post("/api/owner/register", json={"company": "Транс ЕООД", "name": "Иван", "email": email,
+                                            "password": "тайна-парола",
+                                            "registration_code": TEST_REGISTRATION_CODE})
     assert r.status_code == 200, r.text
     return r.json()["token"]
 
@@ -67,7 +71,8 @@ def test_register_login_me(client):
     assert client.post("/api/owner/login", json={"email": "SHEF@firma.bg ", "password": "тайна-парола"}).status_code == 200
     assert client.post("/api/owner/login", json={"email": "shef@firma.bg", "password": "грешна"}).status_code == 401
     assert client.post("/api/owner/register", json={"company": "Друга", "name": "Петър", "email": "shef@firma.bg",
-                                                     "password": "12345678"}).status_code == 409
+                                                     "password": "12345678",
+                                                     "registration_code": TEST_REGISTRATION_CODE}).status_code == 409
 
 
 @pytest.mark.parametrize(("elapsed", "status"), [
@@ -200,7 +205,49 @@ def test_registration_code_when_required(client, monkeypatch):
     monkeypatch.setenv("REGISTRATION_CODE", "PILOT")
     body = {"company": "Транс", "name": "Иван", "email": "a@b.bg", "password": "12345678"}
     assert client.post("/api/owner/register", json=body).status_code == 403
-    assert client.post("/api/owner/register", json={**body, "registration_code": "PILOT"}).status_code == 200
+    assert client.post("/api/owner/register", json={**body, "registration_code": "WRONG"}).status_code == 403
+    response = client.post("/api/owner/register", json={**body, "registration_code": "PILOT"})
+    assert response.status_code == 200
+    assert client.get("/api/me", headers=auth(response.json()["token"])).status_code == 200
+
+
+@pytest.mark.parametrize("configured_code", [None, "", " \t\n"])
+def test_registration_is_disabled_without_nonempty_configuration(client, monkeypatch, configured_code):
+    if configured_code is None:
+        monkeypatch.delenv("REGISTRATION_CODE", raising=False)
+    else:
+        monkeypatch.setenv("REGISTRATION_CODE", configured_code)
+    body = {"company": "Транс", "name": "Иван", "email": "a@b.bg", "password": "12345678"}
+
+    response = client.post("/api/owner/register", json=body)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Регистрацията не е активирана"
+    with SessionLocal() as db:
+        assert db.query(Company).count() == 0
+        assert db.query(User).count() == 0
+        assert db.query(AuthToken).count() == 0
+
+
+def test_registration_code_compares_unicode_without_server_error(client, monkeypatch):
+    monkeypatch.setenv("REGISTRATION_CODE", "κωδικός🔒")
+    body = {"company": "Транс", "name": "Иван", "email": "unicode@b.bg", "password": "12345678"}
+
+    wrong = client.post("/api/owner/register", json={**body, "registration_code": "κωδικος🔒"})
+    assert wrong.status_code == 403
+
+    response = client.post("/api/owner/register", json={**body, "registration_code": "κωδικός🔒"})
+    assert response.status_code == 200
+    assert client.get("/api/me", headers=auth(response.json()["token"])).status_code == 200
+
+
+def test_existing_owner_can_login_when_registration_is_disabled(client, monkeypatch):
+    register(client)
+    monkeypatch.delenv("REGISTRATION_CODE", raising=False)
+
+    response = client.post("/api/owner/login", json={"email": "shef@firma.bg", "password": "тайна-парола"})
+    assert response.status_code == 200
+    assert client.get("/api/me", headers=auth(response.json()["token"])).status_code == 200
 
 
 def test_login_throttle(client):

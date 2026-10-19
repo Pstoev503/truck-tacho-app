@@ -1312,3 +1312,220 @@ test('export and import use no storage, network or timers', () => {
     }
   }
 });
+
+// UI-06: parking review before one planned pause.
+const plannedLongRoute = async (overrides = {}) => {
+  const controller = makeController(overrides);
+  longRoute(controller);
+  await controller.plan();
+  const { result } = controller.getState();
+  assert.equal(result.state, 'estimated');
+  const restIndex = result.events.findIndex(event => event.type === 'rest');
+  return { controller, result, restIndex, rest: result.events[restIndex] };
+};
+
+test('choosing a pause sets the window from its map-plan offset and leaves the plan untouched', async () => {
+  const { controller, result, restIndex, rest } = await plannedLongRoute();
+  const before = controller.getState();
+  const outcome = controller.selectRestForParking(restIndex, 20);
+  assert.equal(outcome.selected, true);
+  const after = controller.getState();
+  assert.equal(rest.fromM, rest.toM);
+  assert.equal(after.parking.restWindow.maxOffsetM, rest.fromM, 'exact fromM, no km rounding');
+  assert.equal(after.parking.restWindow.minOffsetM, rest.fromM - 20_000);
+  assert.equal(after.parking.restWindow.eventIndex, restIndex);
+  assert.equal(after.parking.restWindow.label, 'Пауза 45 мин');
+  assert.equal(after.result, result, 'same plan object, ETA and pauses');
+  assert.equal(after.result.arrivalUtcMs, before.result.arrivalUtcMs);
+  assert.equal(after.routeRevision, before.routeRevision);
+  assert.equal(after.inputRevision, before.inputRevision);
+  assert.deepEqual(after.points, before.points);
+  assert.equal(after.parking.mode, 'empty', 'nothing is evaluated or loaded by the choice');
+});
+
+test('the explicit evaluation sends exactly the pause window and the separate corridor setting', async () => {
+  const seen = [];
+  const { controller, restIndex, rest } = await plannedLongRoute({
+    evaluateParking: request => { seen.push(request); return evaluateParkingCandidates(request); }
+  });
+  controller.setParkingWindow({ fromKm: null, toKm: null, maxLateralM: 300 });
+  const kmBefore = rest.fromM / 1000;
+  controller.loadParkingText(parkingText(
+    parkingRecord('before-pause', kmBefore / 111.19492664455873 - 0.05),
+    parkingRecord('after-pause', kmBefore / 111.19492664455873 + 0.05),
+    parkingRecord('far-before', kmBefore / 111.19492664455873 - 0.5)
+  ));
+  controller.selectRestForParking(restIndex, 20);
+  assert.equal(seen.length, 0, 'no automatic evaluation');
+  await controller.evaluateParking();
+  assert.deepEqual(seen[0].window, { minOffsetM: rest.fromM - 20_000, maxOffsetM: rest.fromM, maxLateralDistanceM: 300 });
+  const { result } = controller.getState().parking;
+  assert.deepEqual(result.candidateIds, ['before-pause']);
+  const after = result.results.find(item => item.id === 'after-pause');
+  assert.ok(after.reasons.includes('outside-window'), 'nothing after the pause is offered');
+  assert.ok(result.results.find(item => item.id === 'far-before').reasons.includes('outside-window'));
+});
+
+test('a drive event, a missing event, a stale index or no plan cannot be chosen', async () => {
+  const { controller, result } = await plannedLongRoute();
+  const driveIndex = result.events.findIndex(event => event.type === 'drive');
+  for (const index of [driveIndex, result.events.length, -1, 1.5, '1', null]) {
+    const outcome = controller.selectRestForParking(index, 20);
+    assert.equal(outcome.selected, false, String(index));
+    assert.equal(controller.getState().parking.restWindow, null);
+  }
+  const fresh = makeController();
+  longRoute(fresh);
+  const noPlan = fresh.selectRestForParking(0, 20);
+  assert.equal(noPlan.selected, false);
+  assert.match(noPlan.error, /актуален график/);
+});
+
+test('lookback is validated without coercion and a custom value is used', async () => {
+  const { controller, restIndex, rest } = await plannedLongRoute();
+  for (const bad of ['20', NaN, 0, 201, Infinity]) {
+    const outcome = controller.selectRestForParking(restIndex, bad);
+    assert.equal(outcome.selected, false, String(bad));
+    assert.match(outcome.error, /Преглед назад/);
+  }
+  controller.selectRestForParking(restIndex, 5);
+  assert.equal(controller.getState().parking.restWindow.minOffsetM, rest.fromM - 5_000);
+  assert.equal(controller.getState().parking.lookbackKm, 5);
+});
+
+test('choosing a pause without a parking list explains the next step and evaluates nothing', async () => {
+  let calls = 0;
+  const { controller, restIndex } = await plannedLongRoute({ evaluateParking: request => { calls++; return evaluateParkingCandidates(request); } });
+  assert.equal(controller.selectRestForParking(restIndex, 20).selected, true);
+  assert.equal(controller.getState().parking.error, null);
+  const outcome = await controller.evaluateParking();
+  assert.equal(outcome.accepted, false);
+  assert.match(outcome.error, /зареди файл/i);
+  assert.equal(calls, 0);
+});
+
+test('choosing a pause drops shown parking results and a pending evaluation but keeps the list', async () => {
+  const gate = deferred();
+  let slow = false;
+  const { controller, restIndex } = await plannedLongRoute({
+    evaluateParking: async request => { if (slow) await gate.promise; return evaluateParkingCandidates(request); }
+  });
+  controller.loadParkingText(parkingText(parkingRecord('p1', 1)), 'list.json');
+  await controller.evaluateParking();
+  assert.equal(controller.getState().parking.mode, 'evaluated');
+  controller.selectRestForParking(restIndex, 20);
+  assert.equal(controller.getState().parking.result, null);
+  assert.equal(controller.getState().parking.items, null);
+  assert.equal(controller.getState().parking.count, 1);
+  slow = true;
+  const pending = controller.evaluateParking();
+  controller.selectRestForParking(restIndex, 10);
+  gate.resolve();
+  assert.deepEqual(await pending, { accepted: false, stale: true });
+  assert.equal(controller.getState().parking.items, null);
+});
+
+test('any input change, import, clear or a new plan drops the link to the old pause', async () => {
+  const source = makeController();
+  longRoute(source);
+  const { text: draftText } = source.exportDraft();
+  const changes = [
+    controller => controller.setBreakStyle('15+30'),
+    controller => controller.dragPoint(1, { lat: 0, lon: 5.9 }),
+    controller => controller.setRoadType(0, 'motorway'),
+    controller => controller.setDeparture({ mode: 'relative', hours: 1, minutes: 0 }),
+    controller => controller.setChoice('section-1', { useExtension: true, dailyRest: 'reduced' }),
+    controller => controller.chooseNoHistory(),
+    controller => controller.importDraftText(draftText),
+    controller => controller.clear(),
+    controller => controller.plan()
+  ];
+  for (const change of changes) {
+    const { controller, restIndex } = await plannedLongRoute();
+    controller.setParkingWindow({ fromKm: null, toKm: null, maxLateralM: 250 });
+    controller.selectRestForParking(restIndex, 20);
+    assert.ok(controller.getState().parking.restWindow);
+    await change(controller);
+    const { parking } = controller.getState();
+    assert.equal(parking.restWindow, null, String(change));
+    assert.deepEqual(parking.window, { fromKm: null, toKm: null, maxLateralM: 250 }, 'back to the whole route');
+  }
+});
+
+test('a replan needs a new explicit pause choice; the old index is not reused silently', async () => {
+  const seen = [];
+  const { controller, restIndex, rest } = await plannedLongRoute({
+    evaluateParking: request => { seen.push(request.window); return evaluateParkingCandidates(request); }
+  });
+  controller.loadParkingText(parkingText(parkingRecord('p1', 1)));
+  controller.selectRestForParking(restIndex, 20);
+  await controller.plan();
+  await controller.evaluateParking();
+  assert.equal(seen.at(-1).maxOffsetM, indexRoute(controller.getState().points).totalLengthM, 'whole route after replan');
+  controller.selectRestForParking(restIndex, 20);
+  await controller.evaluateParking();
+  assert.equal(seen.at(-1).maxOffsetM, controller.getState().result.events[restIndex].fromM);
+  assert.equal(seen.at(-1).maxOffsetM, rest.fromM, 'same inputs give the same pause offset');
+});
+
+test('editing the km fields by hand replaces the pause choice', async () => {
+  const { controller, restIndex } = await plannedLongRoute();
+  controller.selectRestForParking(restIndex, 20);
+  controller.setParkingWindow({ fromKm: 10, toKm: 30, maxLateralM: 500 });
+  assert.equal(controller.getState().parking.restWindow, null);
+  assert.deepEqual(controller.getState().parking.window, { fromKm: 10, toKm: 30, maxLateralM: 500 });
+});
+
+test('a pause at the very start is refused and no zero-length window reaches the evaluator', async () => {
+  let calls = 0;
+  const controller = readyController({
+    adapter: async request => echoed(request, {
+      state: 'estimated',
+      events: [{ type: 'rest', fromM: 0, toM: 0, startUtcMs: fixedNow, endUtcMs: fixedNow + 2_700_000 }],
+      engineResult: { events: [{ label: 'Пауза 45 мин' }] }
+    }),
+    evaluateParking: request => { calls++; return evaluateParkingCandidates(request); }
+  });
+  await controller.plan();
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.001)));
+  const outcome = controller.selectRestForParking(0, 20);
+  assert.equal(outcome.selected, false);
+  assert.match(outcome.error, /началото на маршрута/);
+  assert.equal(controller.getState().parking.restWindow, null);
+  await controller.evaluateParking();
+  assert.equal(calls, 1);
+  assert.equal(controller.getState().parking.result.window.maxOffsetM > 0, true, 'whole route, not a zero window');
+});
+
+test('the draft export stays the 8 v1 fields and holds no pause or parking window', async () => {
+  const { controller, restIndex } = await plannedLongRoute();
+  controller.selectRestForParking(restIndex, 7);
+  const text = controller.exportDraft().text;
+  assert.deepEqual(Object.keys(JSON.parse(text)), ['format', 'version', 'exportedAtUtcMs', 'points', 'roadTypes', 'choices', 'departure', 'breakStyle']);
+  for (const word of ['restWindow', 'lookback', 'minOffsetM', 'maxOffsetM', 'eventIndex', 'Пауза']) {
+    assert.ok(!text.includes(word), word);
+  }
+});
+
+test('the evaluator gets the pause offset in metres, not a value rounded through kilometres', async () => {
+  const fromM = 1000.0001;
+  assert.notEqual((fromM / 1000) * 1000, fromM, 'this offset changes in a km round trip');
+  const seen = [];
+  const controller = readyController({
+    adapter: async request => echoed(request, {
+      state: 'estimated',
+      events: [
+        { type: 'drive', fromM: 0, toM: fromM, startUtcMs: fixedNow, endUtcMs: fixedNow + 60_000 },
+        { type: 'rest', fromM, toM: fromM, startUtcMs: fixedNow + 60_000, endUtcMs: fixedNow + 2_760_000 }
+      ],
+      engineResult: { events: [{ label: 'Каране' }, { label: 'Пауза 45 мин' }] }
+    }),
+    evaluateParking: request => { seen.push(request.window); return evaluateParkingCandidates(request); }
+  }, 2_000);
+  await controller.plan();
+  controller.loadParkingText(parkingText(parkingRecord('p1', 0.005)));
+  assert.equal(controller.selectRestForParking(1, 0.5).selected, true);
+  await controller.evaluateParking();
+  assert.equal(seen[0].maxOffsetM, fromM);
+  assert.equal(seen[0].minOffsetM, fromM - 500);
+});

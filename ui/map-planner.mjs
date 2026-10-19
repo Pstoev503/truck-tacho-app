@@ -4,6 +4,7 @@ import { indexRoute, pointAtOffset } from '../engine/route-position.js';
 import { evaluateParkingCandidates } from '../engine/parking-candidates.js';
 import { loadPlannerInitialState } from './planner-initial-state.mjs';
 import { createDraft, draftFileName, parseDraftText, readDraftFile } from './planner-draft.mjs';
+import { DEFAULT_LOOKBACK_KM, restParkingWindow, validateLookbackKm } from './rest-parking-window.mjs';
 import {
   describeParkingResults, parkingItemNode, parkingSummaryText, parkingTooltipNode, parseParkingText,
   readParkingFile, validateParkingWindow, windowInMeters
@@ -41,7 +42,10 @@ export function createMapPlannerController({
     mode: 'empty', fileName: null, candidates: null, error: null,
     window: validateParkingWindow(), windowError: null,
     revision: 0, loadToken: 0, evaluationToken: 0, requestCounter: 0,
-    evaluating: false, result: null, items: null
+    evaluating: false, result: null, items: null,
+    // A window chosen from one pause of the current plan, in metres; any input
+    // change drops it together with the plan it came from.
+    restWindow: null, lookbackKm: DEFAULT_LOOKBACK_KM
   };
 
   const snapshot = () => ({
@@ -65,7 +69,9 @@ export function createMapPlannerController({
       windowError: parking.windowError,
       evaluating: parking.evaluating,
       result: parking.result,
-      items: parking.items
+      items: parking.items,
+      restWindow: parking.restWindow ? { ...parking.restWindow } : null,
+      lookbackKm: parking.lookbackKm
     }
   });
   const notify = () => onChange(snapshot());
@@ -75,6 +81,13 @@ export function createMapPlannerController({
     parking.evaluating = false;
     parking.result = null;
     parking.items = null;
+  };
+  const dropRestWindow = () => {
+    if (!parking.restWindow) return;
+    parking.restWindow = null;
+    parking.window = validateParkingWindow({ maxLateralM: parking.window.maxLateralM });
+    dropParkingResult();
+    if (parking.mode === 'evaluated') parking.mode = 'loaded';
   };
   const invalidate = routeChanged => {
     if (routeChanged) {
@@ -89,6 +102,7 @@ export function createMapPlannerController({
     result = null;
     error = null;
     dropParkingResult();
+    dropRestWindow();
     if (parking.mode === 'evaluated') parking.mode = 'loaded';
     if (parking.mode === 'loaded') parking.error = null;
     notify();
@@ -198,7 +212,13 @@ export function createMapPlannerController({
         inputRevision: `input-${inputRevision}.parking-${parking.revision}`,
         geometry,
         evaluatedAt: currentNow,
-        window: windowInMeters(parking.window, routeLengthM),
+        window: parking.restWindow
+          ? {
+              minOffsetM: parking.restWindow.minOffsetM,
+              maxOffsetM: parking.restWindow.maxOffsetM,
+              maxLateralDistanceM: parking.window.maxLateralM
+            }
+          : windowInMeters(parking.window, routeLengthM),
         parkingCandidates: parking.candidates
       };
     } catch (caught) {
@@ -350,6 +370,7 @@ export function createMapPlannerController({
     },
     setParkingWindow(nextWindow) {
       dropParkingResult();
+      parking.restWindow = null;
       if (parking.mode === 'evaluated') parking.mode = 'loaded';
       try {
         parking.window = validateParkingWindow(nextWindow);
@@ -361,6 +382,46 @@ export function createMapPlannerController({
       return parking.windowError === null;
     },
     evaluateParking: evaluateParkingList,
+    // Sets the parking window to the stretch before one pause of the shown plan.
+    // The plan, its pauses and ETA stay as they are; nothing is evaluated here.
+    selectRestForParking(eventIndex, lookbackKm = parking.lookbackKm) {
+      dropParkingResult();
+      if (parking.mode === 'evaluated') parking.mode = 'loaded';
+      try {
+        validateLookbackKm(lookbackKm);
+        if (result?.state !== 'estimated' ||
+            result.routeRevision !== `route-${routeRevision}` ||
+            result.inputRevision !== `input-${inputRevision}`) {
+          throw new Error('Няма актуален график; планирай отново и избери пауза от него.');
+        }
+        const event = Number.isInteger(eventIndex) ? result.events[eventIndex] : undefined;
+        const window = restParkingWindow({
+          event,
+          totalLengthM: indexRoute(clone(points)).totalLengthM,
+          lookbackKm
+        });
+        parking.lookbackKm = lookbackKm;
+        parking.restWindow = {
+          eventIndex,
+          label: result.engineResult?.events?.[eventIndex]?.label ?? null,
+          startUtcMs: event.startUtcMs,
+          ...window
+        };
+        parking.window = validateParkingWindow({
+          fromKm: window.minOffsetM / 1000,
+          toKm: window.maxOffsetM / 1000,
+          maxLateralM: parking.window.maxLateralM
+        });
+        parking.windowError = null;
+        parking.error = null;
+      } catch (caught) {
+        parking.error = caught instanceof Error ? caught.message : 'Паузата не може да бъде избрана.';
+        notify();
+        return { selected: false, error: parking.error };
+      }
+      notify();
+      return { selected: true, window: { ...parking.restWindow } };
+    },
     loadInitialHistory(readStorage) {
       history = { mode: 'loading', snapshot: null, summary: null, error: null };
       invalidate(false);
@@ -496,6 +557,8 @@ export function createMapPlannerController({
         return { accepted: true, result: null, error };
       }
       const { requestId, routeRevision: requestedRouteRevision, inputRevision: requestedInputRevision } = request;
+      // A new plan replaces the pauses; a window chosen from the old one goes too.
+      dropRestWindow();
       activeRequestId = requestId;
       result = null;
       error = null;
@@ -740,7 +803,7 @@ function renderPlanner(state, map, layers, controller) {
   $('message').textContent = state.error ?? (state.points.length < 2
     ? 'Добави поне две точки върху картата.' : '');
   $('plan').disabled = state.points.length < 2 || !['loaded', 'none'].includes(state.history.mode);
-  renderSchedule(state.result);
+  renderSchedule(state.result, controller);
 }
 
 function renderDraft(draft) {
@@ -772,6 +835,20 @@ function renderParking(parking) {
     status.textContent = parkingFileText[parking.mode] ?? parkingFileText.empty;
   }
   $('parking-message').textContent = parking.windowError ?? (parking.mode === 'error' ? '' : parking.error ?? '');
+  if (!parking.windowError) {
+    $('parking-from-km').value = parking.window.fromKm === null ? '' : String(parking.window.fromKm);
+    $('parking-to-km').value = parking.window.toKm === null ? '' : String(parking.window.toKm);
+    $('parking-max-m').value = String(parking.window.maxLateralM);
+  }
+  const rest = parking.restWindow;
+  $('parking-rest').textContent = rest
+    ? `Избрана пауза: ${rest.label ?? 'пауза'} (${formatSofiaTime(rest.startUtcMs)}) на ${(rest.restOffsetM / 1000).toFixed(2)} км. ` +
+      `Преглед на линията от ${(rest.minOffsetM / 1000).toFixed(2)} до ${(rest.maxOffsetM / 1000).toFixed(2)} км` +
+      `${rest.clamped ? ' (от началото на маршрута)' : ''}, само преди паузата. ` +
+      (['loaded', 'evaluated'].includes(parking.mode)
+        ? 'Натисни „Оцени паркингите по маршрута“.'
+        : 'Зареди файл с паркинги, после натисни „Оцени паркингите по маршрута“.')
+    : '';
   $('parking-evaluate').disabled = parking.evaluating || !['loaded', 'evaluated'].includes(parking.mode);
   $('parking-clear').disabled = parking.mode === 'empty';
   const list = $('parking-results');
@@ -781,7 +858,7 @@ function renderParking(parking) {
     : (parking.evaluating ? 'Оценяване…' : '');
 }
 
-function renderSchedule(result) {
+function renderSchedule(result, controller) {
   const $ = id => document.getElementById(id);
   const schedule = $('schedule');
   const warnings = $('warnings');
@@ -800,6 +877,17 @@ function renderSchedule(result) {
     const driving = event.type === 'drive';
     const title = driving ? 'Каране' : (source?.label || 'Пауза / дневна почивка');
     const item = element('li', `${title}: ${formatSofiaTime(event.startUtcMs)} – ${formatSofiaTime(event.endUtcMs)}${driving ? ` · ${(event.toM - event.fromM) / 1000 < 0.01 ? '' : ((event.toM - event.fromM) / 1000).toFixed(1) + ' км'}` : ' · Ориентировъчно място за почивка — паркинг не е избран'}`, driving ? 'drive' : 'rest');
+    if (event.type === 'rest') {
+      const review = element('button', 'Прегледай паркинги преди тази пауза', 'secondary');
+      review.type = 'button';
+      review.setAttribute('aria-label', `Прегледай паркинги преди: ${title}, ${formatSofiaTime(event.startUtcMs)}`);
+      review.addEventListener('click', () => {
+        const lookback = document.getElementById('rest-lookback-km');
+        controller.selectRestForParking(index, lookback.value.trim() === '' ? NaN : lookback.valueAsNumber);
+        document.getElementById('parking-heading').scrollIntoView({ block: 'start' });
+      });
+      item.append(' ', review);
+    }
     schedule.append(item);
   }
   const violations = result.engineResult.violations ?? [];
