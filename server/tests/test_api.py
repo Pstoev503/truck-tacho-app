@@ -6,7 +6,9 @@
 import json
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import main  # noqa: E402
+from app import main, security  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import AuthToken, Company, User  # noqa: E402
 
@@ -37,6 +39,8 @@ def client(monkeypatch):
     Base.metadata.create_all(engine)
     main.login_throttle.hits.clear()
     main.join_throttle.hits.clear()
+    with main.route_options_lock:
+        main.route_options_throttle.hits.clear()
     monkeypatch.setenv("REGISTRATION_CODE", TEST_REGISTRATION_CODE)
     with TestClient(main.app) as c:
         yield c
@@ -64,6 +68,31 @@ def join(c, code):
     r = c.post("/api/join", json={"code": code, "device": "тест"})
     assert r.status_code == 200, r.text
     return r.json()["token"]
+
+
+def route_options(c, token):
+    return c.post("/api/route-options", json={
+        "origin": {"lat": 42.7, "lon": 23.3},
+        "destination": {"lat": 43.2, "lon": 27.9},
+    }, headers=auth(token))
+
+
+class RouterResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, _limit):
+        return b'{"trip":{"status":0}}'
+
+
+def successful_router(calls):
+    def urlopen(*_args, **_kwargs):
+        calls.append(True)
+        return RouterResponse()
+    return urlopen
 
 
 def test_register_login_me(client):
@@ -601,3 +630,126 @@ def test_route_options_remains_owner_only(client, monkeypatch):
     assert anonymous.status_code == 401
     assert driver_response.status_code == 403
     assert not calls
+    assert not main.route_options_throttle.hits
+
+
+def test_route_options_budget_allows_ten_and_rejects_eleventh(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", successful_router(calls))
+
+    responses = [route_options(client, token) for _ in range(11)]
+
+    assert [response.status_code for response in responses] == [200] * 10 + [429]
+    assert responses[-1].json()["detail"]
+    assert len(calls) == 10
+
+
+def test_route_options_success_does_not_reset_budget(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", successful_router(calls))
+
+    assert all(route_options(client, token).status_code == 200 for _ in range(10))
+    assert route_options(client, token).status_code == 429
+    assert len(calls) == 10
+
+
+def test_route_options_upstream_failures_consume_budget(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+
+    def fail_upstream(request, **_kwargs):
+        calls.append(request.full_url)
+        raise HTTPError(request.full_url, 503, "synthetic", None, None)
+
+    monkeypatch.setattr(main, "urlopen", fail_upstream)
+
+    assert all(route_options(client, token).status_code == 503 for _ in range(10))
+    assert route_options(client, token).status_code == 429
+    assert len(calls) == 10
+
+
+def test_route_options_invalid_config_does_not_consume_budget(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://router.example/path?invalid")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", successful_router(calls))
+
+    assert route_options(client, token).status_code == 503
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+
+    assert all(route_options(client, token).status_code == 200 for _ in range(10))
+    assert route_options(client, token).status_code == 429
+    assert len(calls) == 10
+
+
+@pytest.mark.parametrize(("elapsed", "expected_status"), [
+    (59.999, 429),
+    (60, 200),
+    (60.001, 200),
+])
+def test_route_options_sliding_window_boundary(client, monkeypatch, elapsed, expected_status):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    clock = [time.time()]
+    monkeypatch.setattr(security.time, "time", lambda: clock[0])
+    calls = []
+    monkeypatch.setattr(main, "urlopen", successful_router(calls))
+
+    assert all(route_options(client, token).status_code == 200 for _ in range(10))
+    clock[0] += elapsed
+
+    assert route_options(client, token).status_code == expected_status
+    assert len(calls) == 10 + (expected_status == 200)
+
+
+def test_route_options_budget_is_shared_by_owner_tokens(client, monkeypatch):
+    token = register(client)
+    second_token = client.post("/api/owner/login", json={
+        "email": "shef@firma.bg", "password": "тайна-парола",
+    }).json()["token"]
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", successful_router(calls))
+
+    assert all(route_options(client, token).status_code == 200 for _ in range(6))
+    assert all(route_options(client, second_token).status_code == 200 for _ in range(4))
+    assert route_options(client, second_token).status_code == 429
+    assert len(calls) == 10
+
+
+def test_route_options_budget_is_isolated_by_company_and_owner(client, monkeypatch):
+    first_token = register(client)
+    second_token = register(client, "other@firma.bg")
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", successful_router(calls))
+
+    assert all(route_options(client, first_token).status_code == 200 for _ in range(10))
+    assert all(route_options(client, second_token).status_code == 200 for _ in range(10))
+    assert route_options(client, first_token).status_code == 429
+    assert route_options(client, second_token).status_code == 429
+    assert len(calls) == 20
+
+
+def test_route_options_concurrent_reservations_never_exceed_ten(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    barrier = threading.Barrier(10)
+
+    def concurrent_upstream(*_args, **_kwargs):
+        calls.append(True)
+        barrier.wait(timeout=10)
+        return RouterResponse()
+
+    monkeypatch.setattr(main, "urlopen", concurrent_upstream)
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        responses = list(pool.map(lambda _index: route_options(client, token), range(12)))
+
+    assert sorted(response.status_code for response in responses) == [200] * 10 + [429] * 2
+    assert len(calls) == 10
