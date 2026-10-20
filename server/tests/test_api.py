@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import event
+from sqlalchemy import event, select, text
 
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://taho:taho@127.0.0.1:5432/taho_test")
@@ -80,6 +80,49 @@ def join(c, code):
     r = c.post("/api/join", json={"code": code, "device": "тест"})
     assert r.status_code == 200, r.text
     return r.json()["token"]
+
+
+def join_in_separate_session(code):
+    with TestClient(main.app) as c:
+        return c.post("/api/join", json={"code": code, "device": "race-test"})
+
+
+def start_join_waiting_on_driver_lock(code):
+    lock_query_started = threading.Event()
+    backend_pids = []
+
+    def record_driver_lock(connection, _cursor, statement, _parameters, _context, _executemany):
+        lowered = statement.lower()
+        if "from users" in lowered and "for update" in lowered:
+            backend_pids.append(connection.connection.driver_connection.info.backend_pid)
+            lock_query_started.set()
+
+    event.listen(engine, "before_cursor_execute", record_driver_lock)
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(join_in_separate_session, code)
+    return future, pool, record_driver_lock, lock_query_started, backend_pids
+
+
+def wait_until_backend_is_lock_blocked(backend_pid, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with engine.connect() as connection:
+            wait_type = connection.execute(
+                text("select wait_event_type from pg_stat_activity where pid = :pid"),
+                {"pid": backend_pid},
+            ).scalar_one_or_none()
+        if wait_type == "Lock":
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def synchronize_invite_reads(barrier):
+    def wait_after_invite_read(_conn, _cursor, statement, _parameters, _context, _executemany):
+        lowered = statement.lower()
+        if "from invites" in lowered and "code_hash" in lowered and "for update" not in lowered:
+            barrier.wait(timeout=5)
+    return wait_after_invite_read
 
 
 def join_key(code, ip="testclient"):
@@ -478,13 +521,13 @@ def test_concurrent_join_claims_one_invite_once(client):
     invite_lookups = []
 
     def wait_after_invite_lookup(_conn, _cursor, statement, _parameters, _context, _executemany):
-        if "from invites" in statement.lower() and "code_hash" in statement.lower():
+        lowered = statement.lower()
+        if "from invites" in lowered and "code_hash" in lowered and "for update" not in lowered:
             invite_lookups.append(statement)
             both_looked_up_invite.wait(timeout=5)
 
     def concurrent_join(_index):
-        with TestClient(main.app) as concurrent_client:
-            return concurrent_client.post("/api/join", json={"code": code})
+        return join_in_separate_session(code)
 
     event.listen(engine, "after_cursor_execute", wait_after_invite_lookup)
     try:
@@ -499,22 +542,259 @@ def test_concurrent_join_claims_one_invite_once(client):
         assert db.query(AuthToken).filter(AuthToken.user_id == driver["id"]).count() == 1
 
 
+def test_five_concurrent_joins_leave_one_new_token_and_preserve_old_state(client):
+    boss = register(client)
+    out = add_driver(client, boss)
+    old_code = out["invite"]["code"]
+    old_token = join(client, old_code)
+    new_code = client.post(
+        f"/api/drivers/{out['driver']['id']}/invite", headers=auth(boss)
+    ).json()["invite"]["code"]
+    old_hash = main.fingerprint(old_token)
+    new_hash = main.fingerprint(main.normalize_code(new_code))
+    with SessionLocal() as db:
+        old_invite = db.query(Invite).filter(
+            Invite.code_hash == main.fingerprint(main.normalize_code(old_code))
+        ).one()
+        old_used_at = old_invite.used_at
+        assert old_used_at is not None
+        assert db.query(AuthToken).filter(
+            AuthToken.user_id == out["driver"]["id"], AuthToken.token_hash == old_hash,
+            AuthToken.revoked.is_(False),
+        ).count() == 1
+
+    barrier = threading.Barrier(5)
+    listener = synchronize_invite_reads(barrier)
+    event.listen(engine, "after_cursor_execute", listener)
+    try:
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            responses = list(pool.map(
+                lambda _index: join_in_separate_session(new_code), range(5)
+            ))
+    finally:
+        event.remove(engine, "after_cursor_execute", listener)
+
+    assert sorted(response.status_code for response in responses) == [200, 404, 404, 404, 404]
+    with SessionLocal() as db:
+        invites = {invite.code_hash: invite for invite in db.query(Invite).all()}
+        assert invites[main.fingerprint(main.normalize_code(old_code))].used_at == old_used_at
+        assert invites[new_hash].used_at is not None
+        tokens = db.query(AuthToken).filter(AuthToken.user_id == out["driver"]["id"]).all()
+        assert len(tokens) == 2
+        old_row = next(token for token in tokens if token.token_hash == old_hash)
+        active_rows = [token for token in tokens if not token.revoked]
+        assert old_row.revoked and len(active_rows) == 1
+        assert active_rows[0].token_hash == main.fingerprint(
+            next(response.json()["token"] for response in responses if response.status_code == 200)
+        )
+
+
+def test_concurrent_normalized_invite_aliases_share_one_claim(client):
+    boss = register(client)
+    code = add_driver(client, boss)["invite"]["code"]
+    cyrillic = code.translate(str.maketrans("ABEKMHOPCTXY", "АВЕКМНОРСТХУ"))
+    variants = [code.lower().replace("-", " "), cyrillic.replace("-", "  ")]
+    assert main.normalize_code(variants[0]) == main.normalize_code(variants[1])
+
+    barrier = threading.Barrier(2)
+    listener = synchronize_invite_reads(barrier)
+    event.listen(engine, "after_cursor_execute", listener)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(join_in_separate_session, variants))
+    finally:
+        event.remove(engine, "after_cursor_execute", listener)
+
+    assert sorted(response.status_code for response in responses) == [200, 404]
+    assert len(main.join_throttle.hits[join_key(variants[0])]) == 2
+    with SessionLocal() as db:
+        assert db.query(Invite).one().used_at is not None
+        assert db.query(AuthToken).filter(
+            AuthToken.user_id == db.query(User).filter(User.role == "driver").one().id
+        ).count() == 1
+
+
+def test_concurrent_joins_for_distinct_drivers_in_one_company(client):
+    boss = register(client)
+    codes = [add_driver(client, boss, name)["invite"]["code"] for name in ("Павел", "Иван")]
+    barrier = threading.Barrier(2)
+    listener = synchronize_invite_reads(barrier)
+    event.listen(engine, "after_cursor_execute", listener)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(join_in_separate_session, codes))
+    finally:
+        event.remove(engine, "after_cursor_execute", listener)
+
+    assert [response.status_code for response in responses] == [200, 200]
+    with SessionLocal() as db:
+        drivers = db.query(User).filter(User.role == "driver").all()
+        assert len(drivers) == 2
+        assert all(db.query(AuthToken).filter(
+            AuthToken.user_id == driver.id, AuthToken.revoked.is_(False)
+        ).count() == 1 for driver in drivers)
+
+
+def test_concurrent_joins_for_different_companies_succeed(client):
+    bosses = [register(client, email) for email in ("first@join.test", "second@join.test")]
+    codes = [add_driver(client, boss, f"Driver {index}")["invite"]["code"]
+             for index, boss in enumerate(bosses)]
+    barrier = threading.Barrier(2)
+    listener = synchronize_invite_reads(barrier)
+    event.listen(engine, "after_cursor_execute", listener)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(join_in_separate_session, codes))
+    finally:
+        event.remove(engine, "after_cursor_execute", listener)
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert len({response.json()["company"]["id"] for response in responses}) == 2
+    with SessionLocal() as db:
+        driver_ids = [driver.id for driver in db.query(User).filter(User.role == "driver").all()]
+        assert len(driver_ids) == 2
+        assert db.query(AuthToken).filter(
+            AuthToken.user_id.in_(driver_ids), AuthToken.revoked.is_(False)
+        ).count() == 2
+
+
+def test_losing_joiners_spend_quota_and_eleventh_attempt_is_rejected(client):
+    boss = register(client)
+    out = add_driver(client, boss)
+    code = out["invite"]["code"]
+    barrier = threading.Barrier(10)
+    listener = synchronize_invite_reads(barrier)
+    event.listen(engine, "after_cursor_execute", listener)
+    try:
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            responses = list(pool.map(
+                lambda _index: join_in_separate_session(code), range(10)
+            ))
+    finally:
+        event.remove(engine, "after_cursor_execute", listener)
+
+    assert [response.status_code for response in responses].count(200) == 1
+    assert [response.status_code for response in responses].count(404) == 9
+    assert join_in_separate_session(code).status_code == 429
+    assert len(main.join_throttle.hits[join_key(code)]) == 10
+    assert len(main.join_aggregate_throttle.hits[join_aggregate_key()]) == 10
+    with SessionLocal() as db:
+        assert db.query(Invite).one().used_at is not None
+        active_tokens = db.query(AuthToken).filter(
+            AuthToken.user_id == out["driver"]["id"], AuthToken.revoked.is_(False)
+        ).all()
+        assert len(active_tokens) == 1
+        assert active_tokens[0].token_hash == main.fingerprint(
+            next(response.json()["token"] for response in responses if response.status_code == 200)
+        )
+
+
+def test_join_rechecks_expiry_after_waiting_for_driver_row_lock(client):
+    boss = register(client)
+    out = add_driver(client, boss)
+    code = out["invite"]["code"]
+    expires_at = int(time.time() * 1000) + 1500
+    with SessionLocal() as db:
+        db.query(Invite).one().expires_at = expires_at
+        db.commit()
+    lock_holder = SessionLocal()
+    lock_holder.execute(
+        select(User.id).where(User.id == out["driver"]["id"]).with_for_update()
+    ).scalar_one()
+    future, pool, listener, query_started, backend_pids = start_join_waiting_on_driver_lock(code)
+    try:
+        assert query_started.wait(timeout=5)
+        assert wait_until_backend_is_lock_blocked(backend_pids[0], timeout=5)
+        while int(time.time() * 1000) <= expires_at:
+            time.sleep(0.01)
+    finally:
+        lock_holder.rollback()
+        lock_holder.close()
+    try:
+        response = future.result(timeout=10)
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)
+        pool.shutdown(wait=True)
+
+    assert response.status_code == 404
+    with SessionLocal() as db:
+        assert db.query(Invite).one().used_at is None
+        assert db.query(AuthToken).filter(
+            AuthToken.user_id == out["driver"]["id"]
+        ).count() == 0
+
+
+def test_join_rechecks_driver_activity_after_waiting_for_driver_row_lock(client):
+    boss = register(client)
+    out = add_driver(client, boss)
+    code = out["invite"]["code"]
+    lock_holder = SessionLocal()
+    driver = lock_holder.execute(
+        select(User).where(User.id == out["driver"]["id"]).with_for_update()
+    ).scalar_one()
+    driver.active = False
+    lock_holder.flush()
+    future, pool, listener, query_started, backend_pids = start_join_waiting_on_driver_lock(code)
+    try:
+        assert query_started.wait(timeout=5)
+        assert wait_until_backend_is_lock_blocked(backend_pids[0], timeout=5)
+    finally:
+        lock_holder.commit()
+        lock_holder.close()
+    try:
+        response = future.result(timeout=10)
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)
+        pool.shutdown(wait=True)
+
+    assert response.status_code == 404
+    with SessionLocal() as db:
+        assert not db.get(User, out["driver"]["id"]).active
+        assert db.query(Invite).one().used_at is None
+        assert db.query(AuthToken).filter(
+            AuthToken.user_id == out["driver"]["id"]
+        ).count() == 0
+
+
 def test_join_claim_rolls_back_if_token_issuance_fails(client, monkeypatch):
     boss = register(client)
     out = add_driver(client, boss)
+    old_token = join(client, out["invite"]["code"])
+    new_code = client.post(
+        f"/api/drivers/{out['driver']['id']}/invite", headers=auth(boss)
+    ).json()["invite"]["code"]
+    old_hash = main.fingerprint(old_token)
 
     def fail_issue_token(*_args, **_kwargs):
         raise RuntimeError("test token issue failure")
 
-    monkeypatch.setattr(main, "issue_token", fail_issue_token)
-    with TestClient(main.app, raise_server_exceptions=False) as failing_client:
-        response = failing_client.post("/api/join", json={"code": out["invite"]["code"]})
+    with monkeypatch.context() as patcher:
+        patcher.setattr(main, "issue_token", fail_issue_token)
+        with TestClient(main.app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post("/api/join", json={"code": new_code})
 
     assert response.status_code == 500
     with SessionLocal() as db:
-        invite = db.query(Invite).one()
+        invite = db.query(Invite).filter(
+            Invite.code_hash == main.fingerprint(main.normalize_code(new_code))
+        ).one()
         assert invite.used_at is None
-        assert db.query(AuthToken).filter(AuthToken.user_id == out["driver"]["id"]).count() == 0
+        tokens = db.query(AuthToken).filter(AuthToken.user_id == out["driver"]["id"]).all()
+        assert len(tokens) == 1
+        assert tokens[0].token_hash == old_hash and not tokens[0].revoked
+
+    retry = join_in_separate_session(new_code)
+    assert retry.status_code == 200
+    with SessionLocal() as db:
+        assert db.query(Invite).filter(
+            Invite.code_hash == main.fingerprint(main.normalize_code(new_code)),
+            Invite.used_at.is_not(None),
+        ).count() == 1
+        tokens = db.query(AuthToken).filter(AuthToken.user_id == out["driver"]["id"]).all()
+        active_tokens = [token for token in tokens if not token.revoked]
+        assert len(active_tokens) == 1
+        assert active_tokens[0].token_hash == main.fingerprint(retry.json()["token"])
+        assert all(token.revoked for token in tokens if token.token_hash == old_hash)
 
 
 def test_concurrent_joins_with_distinct_invites_leave_one_active_token(client):
@@ -534,12 +814,12 @@ def test_concurrent_joins_with_distinct_invites_leave_one_active_token(client):
     both_looked_up_invites = threading.Barrier(2)
 
     def wait_after_invite_lookup(_conn, _cursor, statement, _parameters, _context, _executemany):
-        if "from invites" in statement.lower() and "code_hash" in statement.lower():
+        lowered = statement.lower()
+        if "from invites" in lowered and "code_hash" in lowered and "for update" not in lowered:
             both_looked_up_invites.wait(timeout=5)
 
     def concurrent_join(code):
-        with TestClient(main.app) as concurrent_client:
-            return concurrent_client.post("/api/join", json={"code": code})
+        return join_in_separate_session(code)
 
     event.listen(engine, "after_cursor_execute", wait_after_invite_lookup)
     try:

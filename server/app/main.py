@@ -350,12 +350,25 @@ def join(body: JoinIn, request: Request, db: Session = Depends(get_db)):
             raise HTTPException(429, "Твърде много опити — изчакай 15 минути")
         join_throttle.fail(key)
         join_aggregate_throttle.fail(aggregate_key)
-    t = now_ms()
     inv = db.scalar(select(Invite).where(Invite.code_hash == fingerprint(normalized_code)))
-    if not inv or inv.used_at is not None or inv.expires_at < t:
+    if not inv:
         raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
-    d = db.get(User, inv.user_id)
+    d = db.scalar(
+        select(User)
+        .where(User.id == inv.user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if not d or not d.active:
+        raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
+    inv = db.scalar(
+        select(Invite)
+        .where(Invite.id == inv.id, Invite.code_hash == fingerprint(normalized_code))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    t = now_ms()
+    if not inv or inv.used_at is not None or inv.expires_at < t:
         raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
     claimed_user_id = db.scalar(
         update(Invite)
@@ -365,7 +378,6 @@ def join(body: JoinIn, request: Request, db: Session = Depends(get_db)):
     )
     if claimed_user_id is None:
         raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
-    db.scalar(select(User.id).where(User.id == d.id).with_for_update())
     # един телефон на шофьор: старите входове спират
     db.execute(update(AuthToken).where(AuthToken.user_id == d.id).values(revoked=True))
     token = issue_token(db, d, body.device or "телефон")
