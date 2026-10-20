@@ -17,7 +17,7 @@ source, workflow, or existing evidence files were changed.
 
 ## Checks and current gate
 
-The current branch's standard Actions run, #318 (`39486413586`, on the
+The latest full successful standard Actions run, #318 (`39486413586`, on the
 documentation-only seed head based on the accepted source tree), passed all
 four jobs:
 
@@ -28,7 +28,10 @@ four jobs:
 
 These checks are not a browser execution or performance measurement. The new
 browser gate remains pending; there is no browser artifact or result to claim.
-No code tests were rerun for this documentation-only receipt.
+The receipt push's run #319 (`39486793082`) ended `action_required` with zero
+jobs, not a test failure; no tests ran on the receipt commit. No tests were
+manually rerun for this documentation-only change. The PR's current check list
+has no browser-gate result.
 
 ## Estimate, limits, and next
 
