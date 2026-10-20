@@ -14,7 +14,7 @@ reference must answer 200 with a non-empty body and a fitting Content-Type:
 HTML for .html, a JavaScript MIME type for .js/.mjs, text/css for .css, and
 anything but HTML for other assets (an HTML answer there is an SPA fallback).
 
-Only loopback http:// base URLs are accepted. Proxies and redirects are not
+Only loopback http:// base URLs without user info are accepted. Proxies and redirects are not
 followed, external URLs (http:, https:, data:, //host, #) are never requested,
 and a reference that leaves the base origin or climbs above the web root is an
 error. Exits 1 and lists every problem; exits 2 for bad arguments.
@@ -78,7 +78,13 @@ def media_type(content_type):
 
 
 def check_base(base):
-    parts = urllib.parse.urlsplit(base)
+    try:
+        parts = urllib.parse.urlsplit(base)
+    except ValueError:
+        return None, "base URL is not a valid URL"
+    # No credentials in the address; the message does not repeat the URL or its user info.
+    if "@" in parts.netloc:
+        return None, "base URL must not contain user info (credentials)"
     if parts.scheme != "http" or not parts.hostname:
         return None, f"base URL must be http://<loopback>[:port], got {base!r}"
     host = parts.hostname

@@ -271,6 +271,39 @@ class ServedWebTests(unittest.TestCase):
             self.assertEqual(code, 2, f"{base}: {out}")
 
 
+class BaseUrlTests(unittest.TestCase):
+    """The base URL must be loopback http:// without user info; refused before any request."""
+
+    def test_user_info_is_refused_before_any_request_and_not_echoed(self):
+        site = Site(good_site())
+        self.addCleanup(site.close)
+        host_port = site.base.split("//", 1)[1]
+        for userinfo in ("synthetic-user@", "synthetic-user:synthetic-pass@", "@", ":synthetic-pass@",
+                         "synthetic%40user:synthetic%3Apass@"):
+            code, out, _ = run_checker(f"http://{userinfo}{host_port}", "--entry", "boss.html")
+            self.assertEqual(code, 2, f"{userinfo!r}: {out}")
+            self.assertIn("must not contain user info", out)
+            self.assertNotIn("synthetic", out)
+            self.assertNotIn(host_port, out)
+        self.assertEqual(site.requests, [])
+
+    def test_loopback_bases_without_user_info_are_accepted(self):
+        served = load_served_checker()
+        self.assertEqual(served.check_base("http://127.0.0.1:8000"), ("http://127.0.0.1:8000", None))
+        self.assertEqual(served.check_base("http://localhost:8000/"), ("http://localhost:8000", None))
+        self.assertEqual(served.check_base("http://[::1]:8000"), ("http://[::1]:8000", None))
+        origin, err = served.check_base("http://[::1")
+        self.assertIsNone(origin)
+        self.assertNotIn("::1", err)
+
+
+def load_served_checker():
+    spec = importlib.util.spec_from_file_location("check_served_web", CHECKER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class BossEntryTests(unittest.TestCase):
     """--entry boss.html: inline module imports are part of the checked graph."""
 
