@@ -70,10 +70,10 @@ EXPECTED_MARKERS = [
     "S7 ok (desktop-1280, mobile-375",
     # S7C (route-option count), only printed by scripts/browser-count-staging.mjs after real browser assertions
     "S7C desktop-1280 step 1 ok", "S7C desktop-1280 step 2 ok", "S7C desktop-1280 step 3 ok",
-    "S7C desktop-1280 step 4 ok", "S7C desktop-1280 step 5 ok",
+    "S7C desktop-1280 step 4 ok", "S7C desktop-1280 step 5 ok", "S7C desktop-1280 step 6 ok",
     "S7C desktop-1280 ok (1280x900): 0 JS exceptions",
     "S7C mobile-375 step 1 ok", "S7C mobile-375 step 2 ok", "S7C mobile-375 step 3 ok",
-    "S7C mobile-375 step 4 ok", "S7C mobile-375 step 5 ok",
+    "S7C mobile-375 step 4 ok", "S7C mobile-375 step 5 ok", "S7C mobile-375 step 6 ok",
     "S7C mobile-375 ok (375x812 mobile): 0 JS exceptions",
     "S7C ok (desktop-1280, mobile-375",
     "S7 cleanup: browser stopped (0 own processes left), profile dir removed",

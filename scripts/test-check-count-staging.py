@@ -266,13 +266,14 @@ class ScriptTests(unittest.TestCase):
 
     def test_s7_markers_come_from_the_driver_not_from_the_runbook(self):
         text = runbook_text()
-        self.assertEqual(len(S7_MARKERS), 31)
+        self.assertEqual(len(S7_MARKERS), 33)
         for m in S7_MARKERS:
             self.assertNotIn(m, text)
         with open(st.DRIVER, encoding="utf-8") as f:
             driver = f.read()
-        for step in range(1, 6):
+        for step in range(1, 7):
             self.assertIn(f"log(`S7C ${{w}} step {step} ok", driver)
+        self.assertIn("expectRejectedKeeping(manual, '5001', 'manual')", driver)   # manual line + large overflow
         self.assertIn("from './browser-staging.mjs'", driver)   # the accepted S7 steps, imported unchanged
 
 
@@ -321,6 +322,13 @@ class RunTests(unittest.TestCase):
             "console.log(MARKERS.filter(m => !m.startsWith('S7 mobile-375 step 6')).join('\\n'));")
         self.assertFalse(ok)
         self.assertTrue(any("S7 mobile-375 step 6 ok" in s for s in summary if s.startswith("missing markers")), summary)
+
+    def test_missing_s7c_manual_5001_marker_fails_even_with_exit_0(self):
+        for width in ("desktop-1280", "mobile-375"):
+            ok, summary, out, stubs = self.run_with(
+                f"console.log(MARKERS.filter(m => !m.startsWith('S7C {width} step 5')).join('\\n'));")
+            self.assertFalse(ok)
+            self.assertTrue(any(f"S7C {width} step 5 ok" in s for s in summary if s.startswith("missing markers")), summary)
 
     def test_missing_s7c_overflow_marker_fails_even_with_exit_0(self):
         ok, summary, out, stubs = self.run_with(

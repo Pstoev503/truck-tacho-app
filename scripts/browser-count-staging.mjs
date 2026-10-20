@@ -199,7 +199,11 @@ export async function runCountWidth(cdp, base, spec, { routerLog, setMode, budge
     await expectRejectedKeeping(manual, '4', 'manual');
     log(`S7C ${w} step 4 ok: manual line (4 points, in draft) → router mode 4 → API 200, bounded error, 0 options; manual line, provenance and draft unchanged; router requests +1`);
 
-    step = '5 valid retry';
+    step = '5 overflow 5001 keeps manual line';
+    await expectRejectedKeeping(manual, '5001', 'manual');
+    log(`S7C ${w} step 5 ok: same manual line → router mode 5001 (primary + 5000 alternates) → API 200, bounded error, 0 options; manual line, provenance and draft unchanged; router requests +1`);
+
+    step = '6 valid retry';
     await request('3');
     await expectThree();
     await page.click('#routeOptionsList [data-route-option="0"]');
@@ -207,11 +211,12 @@ export async function runCountWidth(cdp, base, spec, { routerLog, setMode, budge
     s = await page.snapshot();
     check(s.rKm.includes(PROVIDER_GEOMETRY) && s.solid.length === 1, 'retry selection not shown');
     setMode('1');
-    log(`S7C ${w} step 5 ok: retry in router mode 3 → 3 options, option 1 selectable and selected; router mode back to 1`);
+    log(`S7C ${w} step 6 ok: retry in router mode 3 → 3 options, option 1 selectable and selected; router mode back to 1`);
 
     step = 'page errors';
     await sleep(1000);
     check(page.exceptions.length === 0, `JS exceptions: ${page.exceptions.join(' | ')}`);
+    check(page.routeStatuses.length === 6 && page.routeStatuses.every(x => x === 200), `route-options answers: ${page.routeStatuses.join(',')}`);
     log(`S7C ${w} ok (${spec.width}x${spec.height}${spec.mobile ? ' mobile' : ''}): 0 JS exceptions, ${page.blocked.length} external requests blocked, ${page.routeStatuses.length} route-options answers all 200`);
     return { blocked: page.blocked };
   } catch (e) {
