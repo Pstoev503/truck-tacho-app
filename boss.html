@@ -66,6 +66,10 @@
   .pts input { padding:8px; font-size:14px; }
   .pts button { flex:0 0 auto; }
   .found { list-style:none; padding:0; margin:6px 0 0; }
+  fieldset.truck { border:1px solid #3a3a3a; border-radius:10px; padding:6px 10px 10px; margin:10px 0 0; min-width:0; }
+  fieldset.truck legend { font-size:13px; font-weight:700; padding:0 4px; }
+  .tp-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:0 10px; }
+  .tp-grid .err { min-height:0; font-size:12px; }
   .found li { padding:9px; border-bottom:1px solid var(--line); cursor:pointer; font-size:14px; }
   .found li:hover { background:#1f1f1f; }
   .pin { width:24px; height:24px; border-radius:50%; color:#fff; font-weight:700; font-size:12px; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.6); }
@@ -137,8 +141,23 @@
       <ul class="found" id="found"></ul>
       <div class="muted" style="margin-top:6px">Първо добави начало и край, после избери вариант от маршрутизатора или начертай собствено трасе. Шофьорът ще вижда избраната линия.</div>
       <div class="row" style="margin-top:8px"><input id="coords" placeholder="или координати от Google Maps: 42.337, 23.553"><button class="b" id="coordsBtn" style="flex:0 0 auto">＋</button></div>
+      <fieldset class="truck server-only" aria-describedby="tpNote">
+        <legend>Камион за „Варианти по пътищата“</legend>
+        <div class="muted" id="tpNote">Въведи ръчно параметрите на този камион; всички 7 са задължителни. Те не се проверяват и не се запазват: след изход или презареждане полетата са празни. При натискане на „Варианти по пътищата“ началото, краят и тези параметри отиват към маршрутизатора, настроен на сървъра. „Опасен товар“ е само да/не, не е ADR клас. Вариантите не гарантират законен, подходящ или свободен път.</div>
+        <div class="tp-grid">
+        <div><label class="f" for="tpHeight">Височина (m)</label><input id="tpHeight" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="tpHeightErr"><div class="err" id="tpHeightErr"></div></div>
+        <div><label class="f" for="tpWidth">Ширина (m)</label><input id="tpWidth" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="tpWidthErr"><div class="err" id="tpWidthErr"></div></div>
+        <div><label class="f" for="tpLength">Дължина (m)</label><input id="tpLength" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="tpLengthErr"><div class="err" id="tpLengthErr"></div></div>
+        <div><label class="f" for="tpGross">Обща маса (t)</label><input id="tpGross" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="tpGrossErr"><div class="err" id="tpGrossErr"></div></div>
+        <div><label class="f" for="tpAxleLoad">Натоварване на ос (t)</label><input id="tpAxleLoad" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="tpAxleLoadErr"><div class="err" id="tpAxleLoadErr"></div></div>
+        <div><label class="f" for="tpAxleCount">Брой оси (бр.)</label><input id="tpAxleCount" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-describedby="tpAxleCountErr"><div class="err" id="tpAxleCountErr"></div></div>
+        <div><label class="f" for="tpHazmat">Опасен товар</label><select id="tpHazmat" autocomplete="off" aria-describedby="tpHazmatErr"><option value="">Избери</option><option value="no">Не</option><option value="yes">Да</option></select><div class="err" id="tpHazmatErr"></div></div>
+        </div>
+        <div class="err" id="tpErr" aria-live="polite"></div>
+        <button class="b sm" id="tpClear" type="button">Изчисти параметрите на камиона</button>
+      </fieldset>
     <div class="acts"><button class="b" id="routeOptions">🛣 Варианти по пътищата</button><button class="b" id="drawRoute">✏ Начертай собствено трасе</button></div>
-      <div id="routeOptionsList" class="muted"></div>
+      <div id="routeOptionsList" class="muted" aria-live="polite"></div>
     </div>
     <div id="map"></div>
     <div class="card" style="margin-top:10px">
@@ -190,6 +209,7 @@ import { analyze, fmt, clock } from './engine/tacho-rules.js';
 import { totals } from './engine/activity-log.js';
 import { encodeRoute, googleMapsLinks, straightKm, cleanRoute, decodePolyline6 } from './engine/route.js';
 import { serverUrl, dayKey } from './engine/sync.js';
+import { PROFILE_FIELDS, createRouteOptionsController } from './ui/truck-profile-input.mjs';
 
 const H = 3600_000, DAY = 24 * H, MIN = 60_000;
 const $ = id => document.getElementById(id);
@@ -272,8 +292,13 @@ $('loginForm').onsubmit = async ev => {
   } catch (e) { $('loginErr').textContent = e.message; }
 };
 $('routeOnly').onclick = () => { S.routeOnly = true; applyMode(); show('route'); };
-function logoutLocal() { S.token = ''; S.user = null; S.company = null; store.set('boss_token', null); applyMode(); show('login'); }
-$('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} logoutLocal(); };
+function logoutLocal() { S.token = ''; S.user = null; S.company = null; store.set('boss_token', null); clearTruckProfile(); applyMode(); show('login'); }
+$('logout').onclick = () => {
+  // заявката към сървъра взима текущия вход още тук; локалният изход не чака отговора
+  const revoke = api('/api/logout', { method: 'POST' });
+  logoutLocal();
+  revoke.catch(() => {});
+};
 $('saveServer').onclick = () => {
   const v = serverUrl($('serverInput').value); if (!v) { toast('Адресът на сървъра трябва да започва с https://'); return; }
   const a = $('appInput').value.trim();
@@ -420,9 +445,12 @@ let drawing = false;
 let routeAlternatives = [];
 try { pts = JSON.parse(store.get('boss_route_draft') || '[]').filter(p => Number.isFinite(p.lat)); } catch {}
 try { geom = JSON.parse(store.get('boss_route_geometry') || '[]').filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon)); } catch {}
+// произходът на линията е само в паметта: от черновата тя е с непотвърден произход,
+// а линия от маршрутизатора не се записва в черновата (тя е за конкретния камион)
+let geomOrigin = geom.length > 1 ? 'unconfirmed' : 'none';
 $('rName').value = store.get('boss_route_name') || '';
 $('rNotes').value = store.get('boss_route_notes') || '';
-function saveDraft() { store.set('boss_route_draft', JSON.stringify(pts)); store.set('boss_route_geometry', JSON.stringify(geom)); store.set('boss_route_name', $('rName').value); store.set('boss_route_notes', $('rNotes').value); }
+function saveDraft() { store.set('boss_route_draft', JSON.stringify(pts)); store.set('boss_route_geometry', JSON.stringify(geomOrigin === 'provider' ? [] : geom)); store.set('boss_route_name', $('rName').value); store.set('boss_route_notes', $('rNotes').value); }
 ['rName', 'rNotes'].forEach(id => $(id).oninput = saveDraft);
 function initRouteMap() {
   if (routeMap || !L) return;
@@ -435,6 +463,11 @@ function initRouteMap() {
   });
   drawRoute(true);
 }
+const GEOM_ORIGIN = {
+  manual: 'по ръчно начертаната линия',
+  provider: 'по линията от маршрутизатора за въведения камион (не се пази след презареждане)',
+  unconfirmed: 'по запазена линия с непотвърден произход'
+};
 function drawRoute(fit = false) {
   if (routeLayer) {
     routeLayer.clearLayers();
@@ -443,17 +476,17 @@ function drawRoute(fit = false) {
     pts.forEach((p, i) => {
       const color = i === 0 ? '#4CAF50' : i === pts.length - 1 ? '#F44336' : '#2196F3';
       const m = L.marker([p.lat, p.lon], { draggable: true, icon: pinIcon(i + 1, color) }).addTo(routeLayer);
-      m.on('dragend', () => { const q = m.getLatLng(); pts[i].lat = q.lat; pts[i].lon = q.lng; geom = []; saveDraft(); drawRoute(); });
+      m.on('dragend', () => { const q = m.getLatLng(); pts[i].lat = q.lat; pts[i].lon = q.lng; geom = []; dropRouteOptions(); saveDraft(); drawRoute(); });
     });
     if (fit && line.length) routeMap.fitBounds(line.map(p => [p.lat, p.lon]), { padding: [30, 30], maxZoom: 12 });
   }
   $('pts').innerHTML = pts.map((p, i) => `<li><span class="n">${i + 1}</span><input data-i="${i}" value="${esc(p.label)}" placeholder="${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}">
     <button class="b sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button><button class="b sm" data-dn="${i}" ${i < pts.length - 1 ? '' : 'disabled'}>↓</button><button class="b sm warn" data-del="${i}">✕</button></li>`).join('');
-  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · ${geom.length > 1 ? `${geom.length} точки по запазената линия` : 'няма избрана пътна геометрия'} · около ${Math.round(straightKm(geom.length > 1 ? geom : pts))} км по права линия` : 'Сложи поне 2 точки: тръгване и цел.';
+  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · ${geom.length > 1 ? `${geom.length} точки ${GEOM_ORIGIN[geomOrigin] || GEOM_ORIGIN.unconfirmed}` : 'няма избрана пътна геометрия'} · около ${Math.round(straightKm(geom.length > 1 ? geom : pts))} км по права линия` : 'Сложи поне 2 точки: тръгване и цел.';
 }
 function addPoint(lat, lon, label) {
   if (pts.length >= 25) { toast('Най-много 25 точки'); return; }
-  pts.push({ lat, lon, label }); geom = []; saveDraft(); drawRoute();
+  pts.push({ lat, lon, label }); geom = []; dropRouteOptions(); saveDraft(); drawRoute();
 }
 $('pts').oninput = e => { const i = e.target.dataset.i; if (i != null) { pts[i].label = e.target.value; saveDraft(); } };
 $('pts').onclick = e => {
@@ -462,7 +495,7 @@ $('pts').onclick = e => {
   else if (dn != null) [pts[+dn + 1], pts[dn]] = [pts[dn], pts[+dn + 1]];
   else if (del != null) pts.splice(del, 1);
   else return;
-  geom = []; saveDraft(); drawRoute();
+  geom = []; dropRouteOptions(); saveDraft(); drawRoute();
 };
 async function searchPlace() {
   const q = $('search').value.trim(); if (q.length < 2) return;
@@ -495,7 +528,7 @@ function routeLink(r) { return `${appBase()}index.html#route=${encodeRoute(r)}`;
 $('drawRoute').onclick = () => {
   if (!drawing) {
     if (pts.length < 2) { $('routeErr').textContent = 'Първо добави начало и край.'; return; }
-    geom = [{ lat: pts[0].lat, lon: pts[0].lon }]; drawing = true;
+    geom = [{ lat: pts[0].lat, lon: pts[0].lon }]; drawing = true; geomOrigin = 'manual'; routeOptionsCtl.markManualGeometry();
     $('drawRoute').textContent = 'Готово с чертането';
     $('routeErr').textContent = 'Докосвай картата по желаното трасе, после натисни „Готово“.';
   } else {
@@ -514,26 +547,70 @@ function valhallaGeometry(trip) {
   }
   return points;
 }
+// ───────── параметри на камиона: само в паметта на страницата ─────────
+const routeOptionsCtl = createRouteOptionsController({ request: body => api('/api/route-options', { method: 'POST', body }) });
+function truckForm() { return Object.fromEntries(PROFILE_FIELDS.map(f => [f.key, $(f.inputId).value])); }
+function showProfileErrors(errors = []) {
+  for (const f of PROFILE_FIELDS) {
+    const e = errors.find(x => x.field === f.key);
+    $(f.inputId + 'Err').textContent = e ? e.message : '';
+    $(f.inputId).setAttribute('aria-invalid', e ? 'true' : 'false');
+  }
+}
+// стар отговор или грешка вече не важат; връща дали е била избрана линия от маршрутизатора
+function dropRouteOptions() {
+  const { hadProviderSelection } = routeOptionsCtl.invalidate();
+  routeAlternatives = [];
+  $('routeOptionsList').replaceChildren();
+  return hadProviderSelection;
+}
+function onProfileChange() {
+  showProfileErrors(); $('tpErr').textContent = '';
+  // линията е за друг камион: махаме я, ръчно начертаната остава
+  if (dropRouteOptions()) { geom = []; saveDraft(); drawRoute(); $('routeErr').textContent = 'Параметрите на камиона са променени — избраният вариант е премахнат. Поискай варианти отново.'; }
+}
+function clearTruckProfile() { PROFILE_FIELDS.forEach(f => { $(f.inputId).value = ''; }); onProfileChange(); }
+PROFILE_FIELDS.forEach(f => $(f.inputId).addEventListener(f.kind === 'choice' ? 'change' : 'input', onProfileChange));
+$('tpClear').onclick = () => { clearTruckProfile(); $('tpErr').textContent = 'Параметрите на камиона са изчистени.'; $(PROFILE_FIELDS[0].inputId).focus(); };
+function renderRouteAlternatives() {
+  if (!routeAlternatives.length) { $('routeOptionsList').textContent = 'Няма намерени варианти.'; return; }
+  $('routeOptionsList').replaceChildren(...routeAlternatives.map((t, i) => {
+    const km = Math.round(t.summary?.length || 0), min = Math.round((t.summary?.time || 0) / 60);
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'b sm'; b.dataset.routeOption = i;
+    b.style.cssText = 'display:block;width:100%;margin-top:6px;text-align:left';
+    b.textContent = `Вариант ${i + 1} · ${km} км · около ${Math.floor(min / 60)} ч ${min % 60} мин`;
+    return b;
+  }));
+}
 $('routeOptions').onclick = async () => {
-  if (pts.length !== 2) { $('routeErr').textContent = 'За автоматични варианти добави точно начало и край.'; return; }
-  if (!S.token) { $('routeErr').textContent = 'Влез в таблото, за да поискаш варианти от маршрутизатора.'; return; }
-  $('routeOptionsList').textContent = 'Търся варианти по пътната мрежа…';
-  try {
-    const out = await api('/api/route-options', { method: 'POST', body: { origin: pts[0], destination: pts[1] } });
-    routeAlternatives = [out.trip, ...(out.alternates || []).map(x => x.trip || x)].filter(x => x?.legs?.length);
-    $('routeOptionsList').innerHTML = routeAlternatives.map((t, i) => {
-      const km = Math.round(t.summary?.length || 0), min = Math.round((t.summary?.time || 0) / 60);
-      return '<button class="b sm" data-route-option="' + i + '" style="display:block;width:100%;margin-top:6px;text-align:left">Вариант ' + (i + 1) + ' · ' + km + ' км · около ' + Math.floor(min / 60) + ' ч ' + (min % 60) + ' мин</button>';
-    }).join('') || 'Няма намерени варианти.';
-  } catch (e) { $('routeOptionsList').textContent = e.message; }
+  $('tpErr').textContent = '';
+  const run = routeOptionsCtl.requestOptions({ points: pts, form: truckForm(), loggedIn: !!S.token });
+  if (routeOptionsCtl.getState().pending) { showProfileErrors(); $('routeOptionsList').textContent = 'Търся варианти по пътната мрежа за въведения камион…'; }
+  const out = await run;
+  if (out.status === 'invalid') {
+    if (out.reason === 'POINTS') $('routeErr').textContent = 'За автоматични варианти добави точно начало и край.';
+    else if (out.reason === 'LOGIN') $('routeErr').textContent = 'Влез в таблото, за да поискаш варианти от маршрутизатора.';
+    else {
+      showProfileErrors(out.errors);
+      $('tpErr').textContent = 'Попълни правилно всички 7 параметъра на камиона — без тях вариантите не се искат.';
+      $(PROFILE_FIELDS.find(f => f.key === out.errors[0].field).inputId).focus();
+    }
+    return;
+  }
+  if (out.status === 'stale') return;
+  if (out.status === 'error') { $('routeOptionsList').textContent = out.error.message; return; }
+  const data = out.data;
+  routeAlternatives = [data?.trip, ...(data?.alternates || []).map(x => x.trip || x)].filter(x => x?.legs?.length);
+  renderRouteAlternatives();
 };
 $('routeOptionsList').onclick = e => {
   const i = e.target.closest('[data-route-option]')?.dataset.routeOption;
   if (i == null) return;
   const trip = routeAlternatives[+i], shape = valhallaGeometry(trip);
   if (shape.length < 2) { $('routeErr').textContent = 'Маршрутизаторът не върна линия за този вариант.'; return; }
-  geom = shape; drawing = false; saveDraft(); drawRoute(true);
-  $('routeErr').textContent = 'Избран е вариант ' + (+i + 1) + '. Линията ще бъде изпратена към шофьора.';
+  geom = shape; drawing = false; geomOrigin = 'provider'; routeOptionsCtl.markProviderSelected(); saveDraft(); drawRoute(true);
+  $('routeErr').textContent = 'Избран е вариант ' + (+i + 1) + ' за въведения камион. Линията ще бъде изпратена към шофьора; в черновата не се пази.';
 };
 
 $('shareRoute').onclick = () => {
@@ -543,7 +620,7 @@ $('shareRoute').onclick = () => {
   shareText(`Маршрут: ${r.name}\n${link}`, link);
 };
 $('previewRoute').onclick = () => { const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; } window.open(googleMapsLinks(r.waypoints, { fromHere: false })[0], '_blank', 'noopener'); };
-$('clearRoute').onclick = () => { if (!pts.length || confirm('Да изчистя точките?')) { pts = []; geom = []; drawing = false; routeAlternatives = []; $('routeOptionsList').innerHTML = ''; $('drawRoute').classList.remove('on'); $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = ''; $('rNotes').value = ''; saveDraft(); drawRoute(); } };
+$('clearRoute').onclick = () => { if (!pts.length || confirm('Да изчистя точките?')) { pts = []; geom = []; drawing = false; dropRouteOptions(); $('drawRoute').classList.remove('on'); $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = ''; $('rNotes').value = ''; saveDraft(); drawRoute(); } };
 $('sendRoute').onclick = async () => {
   const r = currentRoute(); if (!r) { $('routeErr').textContent = 'Сложи поне 2 точки'; return; }
   const driver_id = +$('rDriver').value || null;
@@ -567,7 +644,7 @@ async function loadRoutes() {
     $('sentRoutes').onclick = async e => {
       const id = e.target.dataset.load || e.target.dataset.cancel; if (!id) return;
       const r = out.routes.find(x => x.id == id);
-      if (e.target.dataset.load) { pts = r.waypoints.map(p => ({ ...p })); geom = (r.geometry || []).map(p => ({ lat: p.lat, lon: p.lon })); drawing = false; $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = r.name; $('rNotes').value = r.notes; saveDraft(); drawRoute(true); window.scrollTo({ top: 0 }); }
+      if (e.target.dataset.load) { pts = r.waypoints.map(p => ({ ...p })); geom = (r.geometry || []).map(p => ({ lat: p.lat, lon: p.lon })); drawing = false; dropRouteOptions(); geomOrigin = geom.length > 1 ? 'unconfirmed' : 'none'; $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = r.name; $('rNotes').value = r.notes; saveDraft(); drawRoute(true); window.scrollTo({ top: 0 }); }
       else if (confirm('Да отменя маршрута?')) { await api(`/api/routes/${id}`, { method: 'PATCH', body: { status: 'cancelled' } }); loadRoutes(); }
     };
   } catch (e) { $('sentRoutes').textContent = e.message; }
