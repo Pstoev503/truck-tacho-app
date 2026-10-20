@@ -471,7 +471,9 @@ def test_join_lock_is_released_before_database_lookup(client):
 
 def test_concurrent_join_claims_one_invite_once(client):
     boss = register(client)
-    code = add_driver(client, boss)["invite"]["code"]
+    out = add_driver(client, boss)
+    driver = out["driver"]
+    code = out["invite"]["code"]
     both_looked_up_invite = threading.Barrier(2)
     invite_lookups = []
 
@@ -493,6 +495,26 @@ def test_concurrent_join_claims_one_invite_once(client):
 
     assert len(invite_lookups) == 2
     assert sorted(response.status_code for response in responses) == [200, 404]
+    with SessionLocal() as db:
+        assert db.query(AuthToken).filter(AuthToken.user_id == driver["id"]).count() == 1
+
+
+def test_join_claim_rolls_back_if_token_issuance_fails(client, monkeypatch):
+    boss = register(client)
+    out = add_driver(client, boss)
+
+    def fail_issue_token(*_args, **_kwargs):
+        raise RuntimeError("test token issue failure")
+
+    monkeypatch.setattr(main, "issue_token", fail_issue_token)
+    with TestClient(main.app, raise_server_exceptions=False) as failing_client:
+        response = failing_client.post("/api/join", json={"code": out["invite"]["code"]})
+
+    assert response.status_code == 500
+    with SessionLocal() as db:
+        invite = db.query(Invite).one()
+        assert invite.used_at is None
+        assert db.query(AuthToken).filter(AuthToken.user_id == out["driver"]["id"]).count() == 0
 
 
 def test_concurrent_same_code_requests_reserve_no_more_than_ten_lookups(client):
