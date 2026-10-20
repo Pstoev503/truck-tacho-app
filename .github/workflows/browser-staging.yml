@@ -1,0 +1,57 @@
+name: Браузърна staging проверка S7 (BROWSER-STAGING-01)
+
+# Само за клона на пакета; не е deploy и няма тайни или права за запис.
+on:
+  push:
+    branches: [claude/browser-staging-01]
+    paths:
+      - scripts/check-browser-staging.py
+      - scripts/test-check-browser-staging.py
+      - scripts/browser-staging.mjs
+      - scripts/browser-staging.test.mjs
+      - .github/workflows/browser-staging.yml
+      - docs/reports/2026-10-20-BROWSER-STAGING-01.md
+
+permissions:
+  contents: read
+
+jobs:
+  browser-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harness (този клон)
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Приложението точно на APP_SHA INT-31 (отделен checkout, само за четене)
+        uses: actions/checkout@v4
+        with:
+          ref: 9c6fbc9d64041ac401c3cd87bcb3f4d2eaafc354
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Версии и наличен браузър (без инсталиране)
+        run: |
+          BROWSER="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          echo "BROWSER=$BROWSER" >> "$GITHUB_ENV"
+          echo "::notice title=versions::node $(node --version); python $(python --version 2>&1); browser ${BROWSER:-none} $( [ -n "$BROWSER" ] && "$BROWSER" --version ); docker $(docker version --format '{{.Server.Version}}'); $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Unit тестове на driver-а (без браузър; не са S7)
+        run: |
+          node --test --test-reporter=tap harness/scripts/browser-staging.test.mjs | tee driver-tests.tap
+          echo "::notice title=driver unit tests - no browser - not S7::$(grep -E '^# (tests|pass|fail|cancelled)' driver-tests.tap | tr '\n' ' ')"
+      - name: Тестове на runner-а със stub docker и фалшиви driver-и (не са S7)
+        env:
+          APP_DIR: ${{ github.workspace }}/app
+        run: python -I harness/scripts/test-check-browser-staging.py
+      - name: Реален disposable Docker пуск на v2 runbook + S7 в истински headless браузър
+        run: >-
+          python -I harness/scripts/check-browser-staging.py
+          --app app --runbook harness/docs/runbooks/isolated-staging-check-v2.md
+          --browser "$BROWSER" --timeout 900
