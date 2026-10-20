@@ -556,8 +556,10 @@ def test_five_concurrent_joins_leave_one_new_token_and_preserve_old_state(client
         old_invite = db.query(Invite).filter(
             Invite.code_hash == main.fingerprint(main.normalize_code(old_code))
         ).one()
+        new_invite = db.query(Invite).filter(Invite.code_hash == new_hash).one()
         old_used_at = old_invite.used_at
         assert old_used_at is not None
+        assert new_invite.used_at is None
         assert db.query(AuthToken).filter(
             AuthToken.user_id == out["driver"]["id"], AuthToken.token_hash == old_hash,
             AuthToken.revoked.is_(False),
@@ -689,14 +691,16 @@ def test_losing_joiners_spend_quota_and_eleventh_attempt_is_rejected(client):
         )
 
 
-def test_join_rechecks_expiry_after_waiting_for_driver_row_lock(client):
+def test_join_rechecks_expiry_after_waiting_for_driver_row_lock(client, monkeypatch):
     boss = register(client)
     out = add_driver(client, boss)
     code = out["invite"]["code"]
-    expires_at = int(time.time() * 1000) + 1500
+    expires_at = int(time.time() * 1000) + 60_000
     with SessionLocal() as db:
         db.query(Invite).one().expires_at = expires_at
         db.commit()
+    handler_time = [expires_at - 1]
+    monkeypatch.setattr(main, "now_ms", lambda: handler_time[0])
     lock_holder = SessionLocal()
     lock_holder.execute(
         select(User.id).where(User.id == out["driver"]["id"]).with_for_update()
@@ -705,8 +709,7 @@ def test_join_rechecks_expiry_after_waiting_for_driver_row_lock(client):
     try:
         assert query_started.wait(timeout=5)
         assert wait_until_backend_is_lock_blocked(backend_pids[0], timeout=5)
-        while int(time.time() * 1000) <= expires_at:
-            time.sleep(0.01)
+        handler_time[0] = expires_at + 1
     finally:
         lock_holder.rollback()
         lock_holder.close()
