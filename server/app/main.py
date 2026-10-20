@@ -222,6 +222,14 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
 # ─────────────────────────── шофьори ───────────────────────────
 
 def make_invite(db: Session, drv: User) -> dict:
+    drv = db.scalar(
+        select(User)
+        .where(User.id == drv.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not drv or not drv.active:
+        raise HTTPException(409, "Шофьорът е спрян")
     t = now_ms()
     # старите неизползвани кодове спират да важат
     db.execute(update(Invite).where(Invite.user_id == drv.id, Invite.used_at.is_(None)).values(expires_at=t))
@@ -270,8 +278,6 @@ def add_driver(body: DriverIn, boss: User = Depends(owner), db: Session = Depend
 @app.post("/api/drivers/{driver_id}/invite")
 def reinvite(driver_id: int, boss: User = Depends(owner), db: Session = Depends(get_db)):
     d = own_driver(db, boss, driver_id)
-    if not d.active:
-        raise HTTPException(409, "Шофьорът е спрян")
     invite = make_invite(db, d)
     db.commit()
     return {"invite": invite}

@@ -759,6 +759,66 @@ def test_join_rechecks_driver_activity_after_waiting_for_driver_row_lock(client)
         ).count() == 0
 
 
+def test_concurrent_join_and_reinvite_use_driver_then_invite_lock_order(client):
+    boss = register(client)
+    out = add_driver(client, boss)
+    code = out["invite"]["code"]
+    renewal_update_reached = threading.Event()
+    release_renewal = threading.Event()
+
+    def pause_after_invite_expiry_update(_conn, _cursor, statement, _parameters, _context, _executemany):
+        lowered = statement.lower()
+        if "update invites" in lowered and "expires_at" in lowered:
+            renewal_update_reached.set()
+            if not release_renewal.wait(timeout=5):
+                raise TimeoutError("invite renewal was not released by its test")
+
+    event.listen(engine, "after_cursor_execute", pause_after_invite_expiry_update)
+    renewal_pool = ThreadPoolExecutor(max_workers=1)
+    join_future = None
+    join_pool = None
+    join_listener = None
+    try:
+        def renew_invite():
+            with TestClient(main.app, raise_server_exceptions=False) as c:
+                return c.post(
+                    f"/api/drivers/{out['driver']['id']}/invite",
+                    headers=auth(boss),
+                )
+
+        renewal_future = renewal_pool.submit(renew_invite)
+        assert renewal_update_reached.wait(timeout=5)
+        join_future, join_pool, join_listener, query_started, backend_pids = (
+            start_join_waiting_on_driver_lock(code)
+        )
+        assert query_started.wait(timeout=5)
+        assert wait_until_backend_is_lock_blocked(backend_pids[0], timeout=5)
+        time.sleep(0.05)
+    finally:
+        release_renewal.set()
+        if join_future is not None:
+            join_response = join_future.result(timeout=10)
+        renewal_response = renewal_future.result(timeout=10)
+        if join_listener is not None:
+            event.remove(engine, "before_cursor_execute", join_listener)
+        event.remove(engine, "after_cursor_execute", pause_after_invite_expiry_update)
+        if join_pool is not None:
+            join_pool.shutdown(wait=True)
+        renewal_pool.shutdown(wait=True)
+
+    assert renewal_response.status_code == 200
+    assert join_response.status_code == 404
+    with SessionLocal() as db:
+        invites = db.query(Invite).order_by(Invite.created_at).all()
+        assert len(invites) == 2
+        assert invites[0].used_at is None
+        assert invites[0].expires_at <= int(time.time() * 1000)
+        assert invites[1].used_at is None
+        assert db.query(AuthToken).filter(
+            AuthToken.user_id == out["driver"]["id"]
+        ).count() == 0
+
+
 def test_join_claim_rolls_back_if_token_issuance_fails(client, monkeypatch):
     boss = register(client)
     out = add_driver(client, boss)
