@@ -1,7 +1,7 @@
 // Тестове за маршрута и синхронизацията. Пускат се с: node --test (от папка engine)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { encodeRoute, decodeRoute, parseHash, googleMapsLinks, gpx, straightKm, cleanRoute } from './route.js';
+import { encodeRoute, decodeRoute, parseHash, googleMapsLinks, gpx, straightKm, cleanRoute, decodePolyline6, MAX_GEOMETRY_POINTS } from './route.js';
 import { syncPayload, statusSnapshot, dayKey, recentShifts, serverUrl, normalizeCode } from './sync.js';
 import { switchTo, addManual } from './activity-log.js';
 import { analyze } from './tacho-rules.js';
@@ -148,4 +148,53 @@ test('прекалено много записи: изпращат се само
 test('код с кирилски букви от българската клавиатура се оправя', () => {
   assert.equal(normalizeCode('авек-23мн'), 'ABEK23MH');
   assert.equal(normalizeCode(' abcd-efgh '), 'ABCDEFGH');
+});
+
+// Кодиране за тестове на decodePolyline6 (точност 6)
+const encPoly = pts => {
+  let la = 0, lo = 0, out = '';
+  const e = v => { let n = v < 0 ? ~(v << 1) : v << 1; while (n >= 0x20) { out += String.fromCharCode((0x20 | (n & 0x1f)) + 63); n >>= 5; } out += String.fromCharCode(n + 63); };
+  for (const [a, b] of pts) { const x = Math.round(a * 1e6), y = Math.round(b * 1e6); e(x - la); e(y - lo); la = x; lo = y; }
+  return out;
+};
+
+test('decodePolyline6: валидни, отрицателни и антимеридиан контроли', () => {
+  assert.deepEqual(decodePolyline6(''), []);
+  assert.deepEqual(decodePolyline6(encPoly([[42.337, 23.553], [42.6977, 23.3219]])), [{ lat: 42.337, lon: 23.553 }, { lat: 42.6977, lon: 23.3219 }]);
+  assert.deepEqual(decodePolyline6(encPoly([[-33.5, -70.25], [-34, -71]])), [{ lat: -33.5, lon: -70.25 }, { lat: -34, lon: -71 }]);
+  assert.deepEqual(decodePolyline6(encPoly([[10, 179.999999], [10, -180], [90, 180], [-90, -180]])).map(p => [p.lat, p.lon]), [[10, 179.999999], [10, -180], [90, 180], [-90, -180]]);
+  assert.equal(decodePolyline6(encPoly(Array.from({ length: MAX_GEOMETRY_POINTS }, (_, i) => [i / 1000, 1]))).length, MAX_GEOMETRY_POINTS);
+});
+
+test('decodePolyline6: невалидни знаци и входове се отхвърлят', () => {
+  const ok = encPoly([[42, 23]]);
+  for (const bad of ['!!', ok + ' ', ok + '\n', '\u0000' + ok, ok + 'ж', ok + '\u007f', null, undefined, 5, {}, ['_p~iF']]) {
+    assert.throws(() => decodePolyline6(bad), /Невалидна геометрия/, String(bad));
+  }
+});
+
+test('decodePolyline6: непълна линия и прекалено дълги varint се отхвърлят', () => {
+  const ok = encPoly([[42, 23]]);
+  assert.throws(() => decodePolyline6(ok.slice(0, -1)), /Невалидна/);
+  assert.throws(() => decodePolyline6(encPoly([[42, 23]]).slice(0, 5)), /Невалидна/);
+  assert.throws(() => decodePolyline6('_'.repeat(5)), /Невалидна/);
+  assert.throws(() => decodePolyline6('~'.repeat(12) + '?'), /Невалидна/);
+});
+
+test('decodePolyline6: географски граници без wraparound', () => {
+  assert.throws(() => decodePolyline6(encPoly([[91, 10]])), /Невалидна/);
+  assert.throws(() => decodePolyline6(encPoly([[-91, 10]])), /Невалидна/);
+  assert.throws(() => decodePolyline6(encPoly([[10, 181]])), /Невалидна/);
+  assert.throws(() => decodePolyline6(encPoly([[10, -181]])), /Невалидна/);
+  assert.throws(() => decodePolyline6(encPoly([[10, 10], [10, 190]])), /Невалидна/);
+  assert.throws(() => decodePolyline6(encPoly([[10, 10], [95, 10]])), /Невалидна/);
+});
+
+test('decodePolyline6: над лимита от точки се отхвърля', () => {
+  assert.throws(() => decodePolyline6(encPoly(Array.from({ length: MAX_GEOMETRY_POINTS + 1 }, (_, i) => [i / 1000, 1]))), /Твърде много/);
+});
+
+test('decodeRoute: повредена геометрия в връзка дава null', () => {
+  const bad = Buffer.from(JSON.stringify({ n: 'x', t: '', w: [[42, 23, 'a'], [43, 24, 'b']], g: '!!' })).toString('base64url');
+  assert.equal(decodeRoute(bad), null);
 });
