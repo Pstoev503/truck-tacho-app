@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { PROFILE_FIELDS } from './truck-profile-input.mjs';
 import {
+  MAX_ROUTE_OPTION_CANDIDATES,
   normalizeRouteOptionsResponse,
   ROUTE_OPTIONS_RESPONSE_ERROR_MESSAGE
 } from './route-options-response.mjs';
@@ -31,6 +32,36 @@ test('normalizes wrapped alternate trips', () => {
 
 test('keeps direct alternate-trip compatibility', () => {
   assert.deepEqual(normalizeRouteOptionsResponse({ trip: PRIMARY, alternates: [DIRECT] }), [PRIMARY, DIRECT]);
+});
+
+test('accepts the maximum candidate count and rejects a larger alternate array before inspecting entries', () => {
+  assert.equal(MAX_ROUTE_OPTION_CANDIDATES, 3);
+  assert.deepEqual(
+    normalizeRouteOptionsResponse({ trip: PRIMARY, alternates: [DIRECT, DIRECT] }),
+    [PRIMARY, DIRECT, DIRECT]
+  );
+
+  const alternates = new Array(5000);
+  Object.defineProperty(alternates, 0, { get() { throw new Error('alternate entry was inspected'); } });
+  assert.throws(
+    () => normalizeRouteOptionsResponse({ trip: PRIMARY, alternates }),
+    error => error.message === ROUTE_OPTIONS_RESPONSE_ERROR_MESSAGE
+  );
+});
+
+test('rejects a 185051-byte response containing 5000 alternates as one whole response', () => {
+  const response = {
+    trip: PRIMARY,
+    alternates: Array.from({ length: 5000 }, () => ({ legs: [{}] })),
+    padding: ''
+  };
+  const fixedBytes = Buffer.byteLength(JSON.stringify(response));
+  response.padding = 'x'.repeat(185051 - fixedBytes);
+  assert.equal(Buffer.byteLength(JSON.stringify(response)), 185051);
+  assert.throws(
+    () => normalizeRouteOptionsResponse(response),
+    error => error.message === ROUTE_OPTIONS_RESPONSE_ERROR_MESSAGE
+  );
 });
 
 for (const [name, response] of [
@@ -343,7 +374,11 @@ test('boss.html (executed): a malformed stale response is ignored', async () => 
   assert.equal(page.boss.ctl.getState().pending, false);
 });
 
-for (const [badAlternates, label] of [[{}, 'object alternates'], [[null], 'null alternate']]) {
+for (const [badAlternates, label] of [
+  [{}, 'object alternates'],
+  [[null], 'null alternate'],
+  [[{ trip: DIRECT }, { trip: DIRECT }, { trip: DIRECT }], 'over-limit alternates']
+]) {
   for (const kind of ['manual', 'provider']) {
     test(`boss.html (executed): malformed ${label} preserves prior ${kind} geometry and permits retry`, async () => {
       const page = await prepareBoss(kind, badAlternates);
