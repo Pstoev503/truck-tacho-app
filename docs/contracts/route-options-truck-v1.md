@@ -66,7 +66,11 @@ not recommended or provider-validated vehicle dimensions.
 ```
 
 A successful API response is the provider's JSON response passed through
-unchanged. Synthetic response:
+unchanged after validation. The server reads at most 5 MiB plus one byte and
+rejects responses larger than 5 MiB. JSON must be syntactically valid and
+contain only finite numbers; non-standard constants such as `NaN` and
+`Infinity`, numeric overflow, and nesting deeper than 100 levels are treated as
+upstream failures. Synthetic response:
 
 ```json
 {"trip": {"status": 0}}
@@ -74,9 +78,10 @@ unchanged. Synthetic response:
 
 Missing or invalid request/profile data returns 422 before outbound network
 activity or route-budget use. Missing/invalid router configuration returns 503;
-an upstream failure returns 503, an invalid upstream response returns 502, and
-an exhausted owner route budget returns 429. The route budget and owner-only
-authorization behavior are unchanged.
+an upstream transport or JSON parsing failure returns a generic 503, an
+oversized or structurally invalid upstream response returns 502, and an
+exhausted owner route budget returns 429. Upstream failures consume route-budget
+attempts. The route budget and owner-only authorization behavior are unchanged.
 
 ## Compatibility, provenance, and limits
 
