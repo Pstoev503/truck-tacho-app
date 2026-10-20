@@ -230,6 +230,7 @@ async function makeManualLine(page) {
 }
 
 function assertFailedSelectionUnchanged(page, storageSnapshot, stateSnapshot, expectedMessage) {
+  assert.equal(page.boss.geom.length, stateSnapshot.geometryValues.length, 'failed selection preserves geometry size');
   assert.match(page.$('routeErr').textContent, expectedMessage);
   assert.strictEqual(page.boss.geom, stateSnapshot.geometry, 'geometry array identity is preserved');
   assert.deepEqual(coords(page.boss.geom), stateSnapshot.geometryValues);
@@ -243,7 +244,7 @@ function assertFailedSelectionUnchanged(page, storageSnapshot, stateSnapshot, ex
 }
 
 const badLegs = [
-  [{ shape: TWO_POINT_SHAPE }, {}],
+  [{ shape: '????' }, {}],
   [{ shape: TWO_POINT_SHAPE }, { shape: '' }],
   [{ shape: TWO_POINT_SHAPE }, { shape: 0 }],
   [{ shape: TWO_POINT_SHAPE }, { shape: '?' }]

@@ -1,32 +1,32 @@
-# PROVIDER-GEOMETRY-01 — изпълнение и receipt
+# PROVIDER-GEOMETRY-01 — review receipt
 
-## Контекст
+## Етап и обхват
 
-- Base: `33206fa07a4c36e002a0a32372874c634b8603fe` (INT29).
+- Base INT29: `33206fa07a4c36e002a0a32372874c634b8603fe`.
 - Branch: `codex/provider-geometry-01-handoff`.
-- Head: този receipt е част от финалния commit на задачата; точният commit е в PR историята.
-- Обхват: точно четири файла — `boss.html`, `ui/provider-geometry.mjs`, `ui/truck-profile-input.test.mjs` и този receipt.
+- Implementation commit: `2244479701bec438560bd87ddd96f952b5fa7370`; this receipt/test-fixture refinement follows it.
+- Точно четири файла спрямо base: `boss.html`, `ui/provider-geometry.mjs`, `ui/provider-geometry.test.mjs`, този report. `ui/truck-profile-input.test.mjs` е възстановен точно от base и няма diff.
+- Engine decoder и лимит са само прочетени/импортирани от `engine/route.js`.
 
 ## Изпълнени етапи
 
-1. Проверих предоставения checkout: предишният commit беше само seed report; реализацията на доставчика още липсваше.
-2. Добавих чист helper за свързване на leg геометриите с общ таван 20 000 точки. Запазва съществуващото премахване на първата точка на следващ leg и отказва целия вариант при общо надвишаване — без отрязване на линията.
-3. Промених избора в реалния inline script на `boss.html`: декодиране/валидация е преди всяка промяна на geometry, provenance, storage или map; грешката се показва в `routeErr`.
-4. Добавих проверки за helper-а и изпълнение на действителния inline script с реалния decoder и синтетични отговори.
+1. Приетият review беше върнат заради тестов файлов обхват, пропускане на невалидни leg-ове, decoder injection и недостатъчна atomic failure проверка.
+2. `providerGeometry(trip)` вече използва реалните `decodePolyline6` и `MAX_GEOMETRY_POINTS`. Невалиден trip/leg, липсващ, празен или не-string shape и decoder failure отказват целия вариант с bounded `ProviderGeometryError`; aggregate overflow се отказва, не се отрязва.
+3. `boss.html` прихваща грешката преди geometry/provenance/storage/map промени. Само познатите helper errors показват собственото bounded съобщение; всяка друга грешка показва общ текст.
+4. Новият `ui/provider-geometry.test.mjs` изпълнява действителния inline script. Failure сценарии започват с вече съществуваща manual или provider линия; проверяват array identity/стойности, provenance, storage, route summary/waypoints, нула save/draw/mark извиквания, видима грешка и липса на throw.
 
-## Проверки
+## Реални проверки
 
-- `node --test ui/truck-profile-input.test.mjs` — 36/36 passed.
-- `node --test ui/*.test.mjs integration/*.test.mjs` — 234/234 passed.
-- `cd engine && node --test` — 700/700 passed.
-- Инлайн сценарий: два валидно декодирани leg-а по 20 000 точки (39 999 след премахване на общата точка) вече се отказват видимо. Geometry, provenance, provider-selected флагът, черновата, обобщението на маршрута и waypoint list остават непроменени.
-- Инлайн сценарий: грешка от реалния `decodePolyline6` се прихваща, показва се в `routeErr` и не променя състоянието.
-- Покритията включват празни/липсващи leg-ове и shapes, единичен и съединен маршрут, празни сегменти, точно 20 000 точки, overflow, невалиден decoder резултат и липсваща decoder функция.
+- `node --test ui/provider-geometry.test.mjs` — 16/16 passed; включва 21 невалидни trip/leg форми, exact-limit 20 000, aggregate overflow, валиден multileg маршрут и UI failures с предишна manual/provider линия.
+- `node --test ui/*.test.mjs integration/*.test.mjs` — 247/247 passed.
+- `cd engine && node --test` — 466/466 passed. Общо: 713 теста, но в отделните групи 247 UI/integration и 466 engine.
+- `node --test --test-name-pattern='boss selector rejects aggregate overflow|boss selector rejects valid geometry followed' ui/provider-geometry.test.mjs` — 10/10 passed срещу фиксирания inline selector.
+- Actual old-boss baseline от INT29: `git show 33206fa07a4c36e002a0a32372874c634b8603fe:boss.html > /tmp/provider-geometry-baseline-boss.html`, после `PROVIDER_GEOMETRY_BOSS_SOURCE=/tmp/provider-geometry-baseline-boss.html node --test --test-name-pattern='boss selector rejects aggregate overflow|boss selector rejects valid geometry followed' ui/provider-geometry.test.mjs` — очаквано 10/10 fail. Inline harness директно установи 39 999 точки вместо предишните 2/3, както и пропусната или изхвърлена грешка при invalid leg-овете.
+- Посоченият workflow run `39433225012` е `action_required` с **0 jobs**; проверката на logs потвърди, че няма failed jobs, следователно това не е тестов pass/fail. INT29 run `39431524953` е success.
+- Secret scan: чист. `git diff --check`: чисто.
 
-## Ограничения и следващо действие
+## Ограничения, блокер и следваща стъпка
 
-- Предоставената baseline репродукция описва старото поведение: 2 × 20 000 точки се обединяват до 39 999, а decoder грешката излиза от click handler без съобщение в `routeErr`.
-- Не са променяни engine decoder/target, server, профил, traffic, workflow, зависимости или production настройки.
-- Не са изпълнявани server/PostgreSQL, live-router или production проверки; те не са нужни за тази клиентска промяна.
-- Изпълнимият DOM harness няма Leaflet; той проверява липсата на промени в route summary и waypoint list, но не прави визуална browser/map проверка.
-- Блокер: няма. Следващото действие е review на този stacked PR спрямо INT29 base; merge/production одобрението остава при собственика.
+- Inline harness използва synthetic JSON fixtures и няма Leaflet; map липсата на мутация се доказва с нула draw calls плюс непроменени route summary/waypoints, не с визуален browser тест.
+- Няма live-router, production или server/PostgreSQL проверка; няма промени по engine, profile, traffic, workflow, зависимости или server.
+- Блокер: няма. Следваща стъпка: независим review на новия commit спрямо INT29. Това не е merge или production одобрение.
