@@ -353,7 +353,7 @@ def main(argv=None):
     elapsed = time.monotonic() - started
     evidence = [line for line in log.getvalue().splitlines() if EVIDENCE.match(line)]
     # one annotation per part: a single notice is cut at about 4 KB
-    annotate("runbook output S1-S6", "\n".join(e for e in evidence if not e.startswith("S7 ")) or "no expected lines")
+    annotate("runbook output S1-S6", "\n".join(e for e in evidence if not e.startswith(("S7 ", "S7C "))) or "no expected lines")
     annotate("browser output S7", "\n".join(e for e in evidence if e.startswith("S7 ")) or "no S7 lines")
     annotate("browser output S7C", "\n".join(e for e in evidence if e.startswith("S7C ")) or "no S7C lines")
     for line in summary:

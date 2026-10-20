@@ -81,7 +81,35 @@ Driver-ът е стартиран срещу реален uvicorn с PostgreSQL 
 
 ## 6. CI (реален браузър и реален Docker)
 
-Попълва се след пуска.
+Отчетът не може да съдържа пуска, който неговият собствен commit задейства. Затова тук е първият пуск, на `5bece34`. Крайният head и неговият пуск са в предаването в #173.
+
+**Пуск на `5bece34cd66eec058c4e8332d4559c89f65fc2ea`**
+
+- run [39487897750](https://github.com/Pstoev503/truck-tacho-app/actions/runs/39487897750), job 118853018517, 19:57:49–19:59:45Z, success. Прочетени са метаданните на стъпките и `::notice` анотациите.
+- **Версии:** Google Chrome 155.0.8059.84 (`Browser.getVersion` след стартиране), Node v22.23.3, Python 3.13.16, Docker 28.0.4, Ubuntu 24.04.5.
+- **Входове:** APP `1a2ccc6…`, v3 blob `ad39eaf…`, harness `5bece34…`.
+- **Тестове без браузър:**
+  - count driver: `# tests 8 # pass 8 # fail 0`;
+  - runner: `Ran 22 tests … OK`, включително отказа на стария APP `9c6fbc9` (отделен checkout `app-old`).
+- **S1–S6:** `PASS: 21 … planner.html`, `PASS: 15 … boss.html`, owner и S1–S5 ok, 36 реда `S6 served …`, `S6 ok`.
+- **S7** (приетите 6 стъпки) при `desktop-1280` и `mobile-375`: всичките `ok`, 0 JS изключения.
+- **S7C:**
+  - при двете ширини стъпки 1–5 са `ok`, както са описани в раздел 4; всеки отговор на `/api/route-options` е 200 (5 за ширина);
+  - `S7C rate pacing: waiting 51 s`, после по 1 s;
+  - `S7C ok (desktop-1280, mobile-375; max 3 options, overflow 4 and 5001 rejected whole, prior lines kept, valid retry)`.
+- **Общо:**
+  - `S7 js exceptions: 0 … (S7 and S7C)`;
+  - `S7 external requests blocked: 93 (tile.openstreetmap.org); only http://127.0.0.1:18080 reached`;
+  - `S7 cleanup: browser stopped (0 own processes left), profile dir removed`.
+- **Почистване:** `bash exit 0`; не е останал container, network или image с `t10.stage.run=20261020195802-2901`; няма процес с временната директория; 99 s; `RESULT: PASS`.
+- **Козметична поправка в крайния head:** S7C редовете влизаха и в анотацията „runbook output S1-S6“ и я отрязваха около 4 KB. Сега са само в „browser output S7C“. Проверките не са променени.
+
+| Сценарий | Статус на `5bece34` |
+|---|---|
+| S1–S6 | PASS (реален Docker) |
+| S7, 1280 и 375 | PASS (реален headless Chrome 155) |
+| S7C, 1280 и 375 | PASS: валиден максимум 3; отказ на целия отговор при 4 и 5001 с непроменени линия, произход и чернова; повторен опит |
+| S5b | NOT RUN |
 
 ## 7. Ограничения
 
