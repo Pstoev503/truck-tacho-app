@@ -64,12 +64,20 @@ T10_NET_ID= T10_DB_ID= T10_ROUTER_ID= T10_API_ID= T10_IMG_ID=
 # NOT RUN
 owned()     { test "$(docker inspect -f '{{index .Config.Labels "t10.stage.run"}}' "$1" 2>/dev/null)" = "$T10_RUN"; }
 owned_net() { test "$(docker network inspect -f '{{index .Labels "t10.stage.run"}}' "$1" 2>/dev/null)" = "$T10_RUN"; }
-cleanup() {
+cleanup() {   # only recorded IDs whose label is from this run; never by name or tag; never forced for images
   for id in "${T10_API_ID:-}" "${T10_ROUTER_ID:-}" "${T10_DB_ID:-}"; do
-    if [ -n "$id" ] && owned "$id"; then docker rm -f "$id" >/dev/null; fi
+    [ -n "$id" ] || continue
+    if owned "$id"; then docker rm -f "$id" >/dev/null 2>&1 || echo "leftover: container $id"
+    else echo "leftover: container $id (label is not from this run; not touched)"; fi
   done
-  if [ -n "${T10_NET_ID:-}" ] && owned_net "$T10_NET_ID"; then docker network rm "$T10_NET_ID" >/dev/null; fi
-  if [ -n "${T10_IMG_ID:-}" ] && owned "$T10_IMG_ID"; then docker image rm "$T10_IMG" >/dev/null; fi
+  if [ -n "${T10_NET_ID:-}" ]; then
+    if owned_net "$T10_NET_ID"; then docker network rm "$T10_NET_ID" >/dev/null 2>&1 || echo "leftover: network $T10_NET_ID"
+    else echo "leftover: network $T10_NET_ID (label is not from this run; not touched)"; fi
+  fi
+  if [ -n "${T10_IMG_ID:-}" ]; then
+    if owned "$T10_IMG_ID"; then docker image rm "$T10_IMG_ID" >/dev/null 2>&1 || echo "leftover: image $T10_IMG_ID (still referenced; not forced)"
+    else echo "leftover: image $T10_IMG_ID (label is not from this run; not touched)"; fi
+  fi
   rm -rf -- "$T10_DIR"
 }
 test "$(git rev-parse HEAD)" = "$T10_SHA"
@@ -80,7 +88,10 @@ if curl -s -m 2 "$T10_BASE/api/health" >/dev/null; then echo "port $T10_PORT bus
 trap cleanup EXIT
 ```
 
-`cleanup` трие само ID-та, записани от този пуск, и само ако label-ът им е `t10.stage.run=$T10_RUN`. Ресурс с друг label или без label (включително чужд ресурс със съвпадащо име) не се пипа.
+`cleanup` трие само ID-та, записани от този пуск, и само ако label-ът им е `t10.stage.run=$T10_RUN`.
+- Нищо не се трие по име или по tag.
+- Образът се трие по проверения създаден ID и **без** `-f`. Ако Docker откаже (например друг tag или контейнер все още сочи към него), се отпечатва `leftover: image …` и не се насилва.
+- Ресурс с друг label или без label, включително ID, към което е пренасочен tag след build-а, не се пипа и се отпечатва като `leftover`.
 
 ### Стъпка 1 — образ от същия Dockerfile
 
