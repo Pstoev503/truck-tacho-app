@@ -55,7 +55,8 @@ response limit and pass-through behavior remain unchanged.
 
 ## Handoff
 
-Implementation and local checks are complete. Remaining estimate: 10–15 minutes
-for final review/validation and handoff, not guaranteed. Next: commit the
-four-file correction and request review. This receipt does not authorize
-merging, production deployment, or provider use.
+Implementation and local checks are complete. The correction is committed as
+`9b1b050`; current PR branch is `codex/route-options-count01-handoff`. Remaining
+estimate at handoff: 10–15 minutes for final review/acceptance, not guaranteed.
+Next: PR review and acceptance. This receipt does not authorize merging,
+production deployment, or provider use.
