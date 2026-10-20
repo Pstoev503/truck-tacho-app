@@ -76,11 +76,6 @@ upstream failures. Synthetic response:
 {"trip": {"status": 0}}
 ```
 
-The UI accepts at most three route candidates total: the primary `trip` and up
-to two entries in `alternates`. If `alternates` has more than two entries, the
-UI rejects the entire response before inspecting the alternate entries; it does
-not silently truncate the list.
-
 Missing or invalid request/profile data returns 422 before outbound network
 activity or route-budget use. Missing/invalid router configuration returns 503;
 an upstream transport or JSON parsing failure returns a generic 503, an
