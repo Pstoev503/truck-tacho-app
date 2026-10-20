@@ -207,10 +207,11 @@
 <script type="module">
 import { analyze, fmt, clock } from './engine/tacho-rules.js';
 import { totals } from './engine/activity-log.js';
-import { encodeRoute, googleMapsLinks, straightKm, cleanRoute, decodePolyline6 } from './engine/route.js';
+import { encodeRoute, googleMapsLinks, straightKm, cleanRoute } from './engine/route.js';
 import { serverUrl, dayKey } from './engine/sync.js';
 import { PROFILE_FIELDS, createRouteOptionsController } from './ui/truck-profile-input.mjs';
 import { apiErrorMessage } from './ui/api-error-message.mjs';
+import { ProviderGeometryError, providerGeometry } from './ui/provider-geometry.mjs';
 
 const H = 3600_000, DAY = 24 * H, MIN = 60_000;
 const $ = id => document.getElementById(id);
@@ -540,13 +541,7 @@ $('drawRoute').onclick = () => {
   saveDraft(); drawRoute();
 };
 function valhallaGeometry(trip) {
-  const points = [];
-  for (const leg of (trip?.legs || [])) {
-    if (!leg.shape) continue;
-    const decoded = decodePolyline6(leg.shape);
-    points.push(...(points.length ? decoded.slice(1) : decoded));
-  }
-  return points;
+  return providerGeometry(trip);
 }
 // ───────── параметри на камиона: само в паметта на страницата ─────────
 const routeOptionsCtl = createRouteOptionsController({ request: body => api('/api/route-options', { method: 'POST', body }) });
@@ -608,7 +603,15 @@ $('routeOptions').onclick = async () => {
 $('routeOptionsList').onclick = e => {
   const i = e.target.closest('[data-route-option]')?.dataset.routeOption;
   if (i == null) return;
-  const trip = routeAlternatives[+i], shape = valhallaGeometry(trip);
+  const trip = routeAlternatives[+i];
+  let shape;
+  try { shape = valhallaGeometry(trip); }
+  catch (error) {
+    const message = error instanceof ProviderGeometryError
+      ? error.message : 'Геометрията на варианта не може да бъде избрана.';
+    $('routeErr').textContent = `Вариантът не може да бъде избран: ${message}`;
+    return;
+  }
   if (shape.length < 2) { $('routeErr').textContent = 'Маршрутизаторът не върна линия за този вариант.'; return; }
   geom = shape; drawing = false; geomOrigin = 'provider'; routeOptionsCtl.markProviderSelected(); saveDraft(); drawRoute(true);
   $('routeErr').textContent = 'Избран е вариант ' + (+i + 1) + ' за въведения камион. Линията ще бъде изпратена към шофьора; в черновата не се пази.';
