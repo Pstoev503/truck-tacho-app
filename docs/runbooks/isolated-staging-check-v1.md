@@ -1,104 +1,133 @@
 # Изолирана staging проверка v1 (disposable, loopback, synthetic)
 
-Версия на входа: INT-27 `b70c940a5a73a978c7eec8dfed3b03cd7dfb6d8f`. Автор: Claude (RELEASE-GATES-02 #147). Не е production процедура, не е deploy и не е одобрение.
+Версия на входа: INT-27 `b70c940a5a73a978c7eec8dfed3b03cd7dfb6d8f`. Автор: Claude (RELEASE-GATES-02 #147). Не е production процедура, не е deploy и не е разрешение за изпълнение в production.
 
-**Статус на командите.**
-- **NOT RUN:** нито една Docker стъпка от този runbook не е изпълнена от автора, защото в работната среда няма Docker демон.
-- **Пробно пуснати локално:** HTTP стъпките на сценариите S1–S6. Те са пуснати срещу реалния `app.main:app` с uvicorn и disposable PostgreSQL, **без Docker**. Резултатите са в `docs/reports/2026-10-20-RELEASE-GATES-02.md`.
-- Всяка стъпка по-долу е отбелязана **NOT RUN** или **DRY-RUN (локално, без Docker)**.
-- Очакваните резултати са изведени от кода на входната версия и от съществуващите тестове. Те не са наблюдавани в Docker.
+**Статус на командите:**
+- **NOT RUN:** всички Docker стъпки (0–5 и почистването) и ръчният сценарий S7. В работната среда на автора няма Docker демон.
+- **DRY-RUN (буквално извлечени блокове, без Docker):** блоковете `vars`, `helpers`, `owner` и `s1`–`s6`. Извлечени са дословно от този файл и са изпълнени локално; подменени са само функциите `start_api`, `router_count` и `router_last`, защото те зависят от Docker. Подмяната и резултатът са в `docs/reports/2026-10-20-RELEASE-GATES-02.md`.
+- Очакваните резултати са изведени от кода на входната версия и от теста на блоковете без Docker. В Docker не са наблюдавани.
 
 ## 1. Граници
 
-- **Мрежа.** Само loopback на машината, която прави проверката. Отделна Docker bridge мрежа `t10-stage-net`. API-то се публикува **само** на `127.0.0.1`; базата и fake router-ът нямат публикувани портове. Приложението прави изходящи заявки само към `VALHALLA_URL`, който тук е fake router-ът. Мрежата не е `--internal`, защото публикуван порт към internal мрежа не е надежден на всички платформи.
-- **Данни.** Само synthetic: адреси `*.test`, synthetic имена и код за регистрация, генерирана временна парола за базата. Не се ползват `.env`, `server/deploy/.env`, Datex, `par.txt`, реални имейли или реални credentials.
-- **Маршрутизатор.** Няма реален маршрутизатор. `VALHALLA_URL` сочи към локален fake router в същата изолирана Docker мрежа. Той връща фиксиран synthetic отговор и записва получените заявки. **Не доказва** поведение на реален provider, диапазони, ADR или пътна достъпност.
-- **Docker ресурси.** Само ресурси с изрично име и префикс `t10-stage-`: 1 мрежа, 3 контейнера, 1 образ. Базата е на `tmpfs`, без volume. Без mount на работни директории (напр. `C:\Top10EU`) и без `docker system prune`/`volume prune`/`rm $(docker ps -aq)`. Освен двата скрипта, които runbook-ът създава във временна директория, не се mount-ват файлове.
-- **Без `server/deploy/docker-compose.yml`.** Този compose публикува 80/443 през Caddy и ползва именуван volume `pgdata`; той е за реален хост и **не се** ползва тук.
-- **Таймаути.** Всяко чакане е ограничено: readiness до 60 s, всяка HTTP заявка до 15 s.
+- **Мрежа.** Само loopback на машината, която прави проверката.
+  - Отделна Docker bridge мрежа само за този пуск.
+  - API-то се публикува **само** на `127.0.0.1`; базата и fake router-ът нямат публикувани портове.
+  - Приложението прави изходящи заявки само към `VALHALLA_URL`, който тук е fake router-ът.
+  - Мрежата не е `--internal`, защото публикуван порт към internal мрежа не е надежден на всички платформи.
+- **Данни.** Само synthetic: адреси `*.test`, synthetic имена и код за регистрация, генерирана временна парола за базата. Не се ползват `.env`, `server/deploy/.env`, Datex, `par.txt`, реални имейли или реални credentials. Токените не се отпечатват.
+- **Маршрутизатор.** Няма реален маршрутизатор. Fake router-ът връща фиксиран synthetic trip и записва заявките. **Не доказва** поведение на реален provider, диапазони, ADR или пътна достъпност.
+- **Собственост на Docker ресурсите.**
+  - Всеки пуск има уникален `T10_RUN`. Той е в имената, в image tag-а и в label-а `t10.stage.run=<T10_RUN>` на всеки създаден ресурс.
+  - Стъпка 0 спира, ако някое име, tag или порт вече съществува.
+  - Създадените ID-та се записват. Рестартът и почистването трият **само** записаните ID-та и само след проверка, че label-ът им е от този пуск.
+  - Без шаблонно триене, `prune`, `rm $(docker ps -aq)` и без mount на работни директории (напр. `C:\Top10EU`). Единственият mount е генерираният `router.py` от временната директория.
+- **Без `server/deploy/docker-compose.yml`.** Той публикува 80/443 през Caddy и ползва именуван volume `pgdata`; той е за реален хост.
+- **Таймаути.** Всяка HTTP заявка е до 15 s (`curl -m 15`). Readiness на базата и на API-то има deadline 60 s по `SECONDS`. Реалната горна граница е около 70 s за базата (60 s + последен опит и пауза) и около 63 s за API-то (60 s + `curl -m 2` + 1 s).
 
 ## 2. Предпоставки (prerequisites / gates)
 
 | # | Предпоставка | Ако липсва |
 |---|---|---|
-| P1 | Linux или macOS shell (bash), Docker Engine с права за `docker build/run/network` | Спри: проверката не може да се направи. Не заобикаляй с compose или с чужда база. |
-| P2 | Git checkout точно на `b70c940a5a73a978c7eec8dfed3b03cd7dfb6d8f` (`git rev-parse HEAD`) | Спри или запиши точния различен SHA в доказателствата. |
-| P3 | `python3` (3.10+) на хоста за двата checker скрипта и JSON обработката | Спри стъпките S5 и S6. |
-| P4 | `curl` на хоста | Спри. |
-| P5 | Свободни loopback порт `18080` и имената `t10-stage-*` (стъпка 0) | Избери друг порт или спри; не трий чужди ресурси. |
-| P6 | Мрежов достъп за изтегляне на `python:3.13-slim` и `postgres:16` (или вече налични локално) | Спри. |
-| P7 | Браузър (Chromium, Firefox или Safari) за ръчния сценарий S7 | S7 остава NOT RUN; останалите не зависят от него. |
+| P1 | bash (Linux/macOS) и Docker Engine с права за `build/run/network/inspect` | Спри. Не заобикаляй с compose или с чужда база. |
+| P2 | Git checkout точно на `b70c940a5a73a978c7eec8dfed3b03cd7dfb6d8f` | Спри. |
+| P3 | `python3` (3.8+) и `curl` на хоста | Спри. |
+| P4 | Свободен loopback порт `18080` | Смени `T10_PORT` или спри. |
+| P5 | Достъп до `python:3.13-slim` и `postgres:16` (изтегляне или локално копие) | Спри. |
+| P6 | Браузър за ръчния S7 | S7 остава NOT RUN. |
 
 ## 3. Променливи
 
+<!-- run:vars -->
 ```bash
-# NOT RUN
+# NOT RUN in Docker; DRY-RUN as an extracted block
 set -euo pipefail
 export T10_SHA=b70c940a5a73a978c7eec8dfed3b03cd7dfb6d8f
-export T10_IMG=t10-stage-api:${T10_SHA:0:12}
-export T10_NET=t10-stage-net
-export T10_DB=t10-stage-db
-export T10_API=t10-stage-api
-export T10_ROUTER=t10-stage-router
+export T10_RUN="$(date +%Y%m%d%H%M%S)-$$"
+export T10_LABEL="t10.stage.run=$T10_RUN"
+export T10_IMG="t10-stage-api:$T10_RUN"
+export T10_NET="t10-stage-$T10_RUN-net" T10_DB="t10-stage-$T10_RUN-db"
+export T10_API="t10-stage-$T10_RUN-api" T10_ROUTER="t10-stage-$T10_RUN-router"
 export T10_PORT=18080
-export T10_BASE=http://127.0.0.1:${T10_PORT}
-export T10_DIR="$(mktemp -d -t t10-stage-XXXXXX)"          # само за този runbook
-export T10_DB_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"   # временна, не се записва никъде
+export T10_BASE="http://127.0.0.1:$T10_PORT"
+export T10_DIR="$(mktemp -d -t t10-stage-XXXXXX)"
+export T10_DB_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
 export T10_REG_CODE=synthetic-staging-registration-code
+T10_NET_ID= T10_DB_ID= T10_ROUTER_ID= T10_API_ID= T10_IMG_ID=
 ```
 
-`T10_DB_PASSWORD` е временна и живее само в shell сесията. Не я записвай в доказателствата.
+## 4. Docker стъпки (всички NOT RUN)
 
-## 4. Стъпки
+### Стъпка 0 — предварителна проверка и почистване при изход
 
-### Стъпка 0 — предварителна проверка (NOT RUN)
-
+<!-- run:docker-0 -->
 ```bash
+# NOT RUN
+owned()     { test "$(docker inspect -f '{{index .Config.Labels "t10.stage.run"}}' "$1" 2>/dev/null)" = "$T10_RUN"; }
+owned_net() { test "$(docker network inspect -f '{{index .Labels "t10.stage.run"}}' "$1" 2>/dev/null)" = "$T10_RUN"; }
+cleanup() {
+  for id in "${T10_API_ID:-}" "${T10_ROUTER_ID:-}" "${T10_DB_ID:-}"; do
+    if [ -n "$id" ] && owned "$id"; then docker rm -f "$id" >/dev/null; fi
+  done
+  if [ -n "${T10_NET_ID:-}" ] && owned_net "$T10_NET_ID"; then docker network rm "$T10_NET_ID" >/dev/null; fi
+  if [ -n "${T10_IMG_ID:-}" ] && owned "$T10_IMG_ID"; then docker image rm "$T10_IMG" >/dev/null; fi
+  rm -rf -- "$T10_DIR"
+}
 test "$(git rev-parse HEAD)" = "$T10_SHA"
-test -z "$(docker ps -aq --filter name='^t10-stage-')" || { echo "t10-stage-* containers exist: stop, do not delete foreign resources"; exit 1; }
-test -z "$(docker network ls -q --filter name='^t10-stage-net$')" || { echo "network exists"; exit 1; }
-! curl -s -m 2 "$T10_BASE/api/health" >/dev/null || { echo "port $T10_PORT is busy"; exit 1; }
+for name in "$T10_NET" "$T10_DB" "$T10_API" "$T10_ROUTER" "$T10_IMG"; do
+  if docker inspect "$name" >/dev/null 2>&1; then echo "exists: $name — stop, nothing created"; exit 1; fi
+done
+if curl -s -m 2 "$T10_BASE/api/health" >/dev/null; then echo "port $T10_PORT busy — stop"; exit 1; fi
+trap cleanup EXIT
 ```
 
-Очаквано: и четирите проверки минават без изход. Ако някоя не мине, спри; не трий ресурси, които не са създадени от този runbook.
+`cleanup` трие само ID-та, записани от този пуск, и само ако label-ът им е `t10.stage.run=$T10_RUN`. Ресурс с друг label или без label (включително чужд ресурс със съвпадащо име) не се пипа.
 
-### Стъпка 1 — образ от същия Dockerfile (NOT RUN)
+### Стъпка 1 — образ от същия Dockerfile
 
+<!-- run:docker-1 -->
 ```bash
-docker build -f server/Dockerfile -t "$T10_IMG" .
+# NOT RUN
+docker build --label "$T10_LABEL" -f server/Dockerfile -t "$T10_IMG" .
+T10_IMG_ID="$(docker image inspect -f '{{.Id}}' "$T10_IMG")"
+owned "$T10_IMG_ID"
 ```
 
-Очаквано: успешен build. Dockerfile-ът копира `server/app`, `index.html`, `boss.html`, `manifest.json`, `sw.js`, `planner.html`, `engine/`, `vendor/` и `ui/` в `/app/web`.
+Tag-ът е уникален за пуска и стъпка 0 е проверила, че не съществува, така че build-ът не презаписва чужд tag.
 
-### Стъпка 2 — пакетиране без мрежа (NOT RUN; същото го прави CI)
+### Стъпка 2 — пакетиране без мрежа (повторение на CI)
 
+<!-- run:docker-2 -->
 ```bash
-docker run --rm -i --network none "$T10_IMG" python - /app/web < scripts/check-packaged-web.py
-docker run --rm -i --network none "$T10_IMG" python - /app/web --entry boss.html < scripts/check-packaged-web.py
+# NOT RUN
+docker run --rm -i --network none --label "$T10_LABEL" "$T10_IMG_ID" python - /app/web < scripts/check-packaged-web.py | tail -1
+docker run --rm -i --network none --label "$T10_LABEL" "$T10_IMG_ID" python - /app/web --entry boss.html < scripts/check-packaged-web.py | tail -1
 ```
 
 Очаквано: `PASS: 21 local files reachable from planner.html` и `PASS: 12 local files reachable from boss.html`. Броевете са от CI на INT-27, прочетени от Codex.
 
-### Стъпка 3 — изолирана мрежа и база (NOT RUN)
+### Стъпка 3 — мрежа и база
 
+<!-- run:docker-3 -->
 ```bash
-docker network create "$T10_NET"
-docker run -d --name "$T10_DB" --network "$T10_NET" --tmpfs /var/lib/postgresql/data \
-  -e POSTGRES_USER=taho -e POSTGRES_PASSWORD="$T10_DB_PASSWORD" -e POSTGRES_DB=taho_stage postgres:16
-for i in $(seq 1 30); do docker exec "$T10_DB" pg_isready -U taho -d taho_stage && break; sleep 2; done
-docker exec "$T10_DB" pg_isready -U taho -d taho_stage
+# NOT RUN
+T10_NET_ID="$(docker network create --label "$T10_LABEL" "$T10_NET")"
+T10_DB_ID="$(docker run -d --label "$T10_LABEL" --name "$T10_DB" --network "$T10_NET_ID" \
+  --tmpfs /var/lib/postgresql/data \
+  -e POSTGRES_USER=taho -e POSTGRES_PASSWORD="$T10_DB_PASSWORD" -e POSTGRES_DB=taho_stage postgres:16)"
+deadline=$((SECONDS + 60))
+until docker exec "$T10_DB_ID" pg_isready -U taho -d taho_stage >/dev/null 2>&1; do
+  [ "$SECONDS" -lt "$deadline" ] || { echo "db not ready within 60 s"; exit 1; }
+  sleep 2
+done
 ```
 
-- Базата няма публикуван порт и е на `tmpfs`, без volume.
-- Очаквано: `accepting connections` до 60 s.
+### Стъпка 4 — fake router
 
-### Стъпка 4 — fake router (NOT RUN)
-
-Записва се в `$T10_DIR/router.py` и се пуска от същия образ (stdlib Python). Отговаря само на `POST /route` с фиксиран synthetic trip и пише всяка получена заявка в stdout.
-
+<!-- run:router-script -->
 ```bash
+# NOT RUN in Docker; DRY-RUN: this exact heredoc writes the router script
 cat > "$T10_DIR/router.py" <<'PY'
-import json, sys
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TRIP = {"trip": {"status": 0, "legs": [{"shape": "_mempA_ybmk@_}hQ_iwfB_seK_a_pD"}],
                  "summary": {"length": 401.0, "time": 18600}}}
@@ -113,102 +142,209 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 ThreadingHTTPServer(("0.0.0.0", 8002), H).serve_forever()
 PY
-docker run -d --name "$T10_ROUTER" --network "$T10_NET" -v "$T10_DIR/router.py:/fixture/router.py:ro" "$T10_IMG" python /fixture/router.py
 ```
 
-Брой заявки, получени от fake router-а (използва се в S1–S3):
-
+<!-- run:docker-4 -->
 ```bash
-router_count() { docker logs "$T10_ROUTER" 2>/dev/null | grep -c '^ROUTER-REQUEST' || true; }
+# NOT RUN
+T10_ROUTER_ID="$(docker run -d --label "$T10_LABEL" --name "$T10_ROUTER" --network "$T10_NET_ID" \
+  -v "$T10_DIR/router.py:/fixture/router.py:ro" "$T10_IMG_ID" python /fixture/router.py)"
+router_count() { docker logs "$T10_ROUTER_ID" 2>/dev/null | grep -c '^ROUTER-REQUEST' || true; }
+router_last()  { docker logs "$T10_ROUTER_ID" 2>/dev/null | grep '^ROUTER-REQUEST' | tail -1 | sed 's/^ROUTER-REQUEST //'; }
 ```
 
-### Стъпка 5 — API без маршрутизатор (NOT RUN)
+Shape-ът е polyline6 на точките (42.7, 23.3), (43, 25) и (43.2, 27.9); декодира се с `engine/route.js` `decodePolyline6`.
 
+### Стъпка 5 — API (първо без маршрутизатор)
+
+<!-- run:docker-5 -->
 ```bash
-start_api() {   # $1: празно или VALHALLA_URL
-  docker rm -f "$T10_API" >/dev/null 2>&1 || true
-  docker run -d --name "$T10_API" --network "$T10_NET" -p "127.0.0.1:${T10_PORT}:8000" \
+# NOT RUN
+start_api() {   # $1: empty, or VALHALLA_URL
+  if [ -n "${T10_API_ID:-}" ]; then
+    owned "$T10_API_ID" || { echo "API container is not from this run — stop"; return 1; }
+    docker rm -f "$T10_API_ID" >/dev/null
+    T10_API_ID=
+  fi
+  T10_API_ID="$(docker run -d --label "$T10_LABEL" --name "$T10_API" --network "$T10_NET_ID" \
+    -p "127.0.0.1:${T10_PORT}:8000" \
     -e DATABASE_URL="postgresql+psycopg://taho:${T10_DB_PASSWORD}@${T10_DB}:5432/taho_stage" \
-    -e REGISTRATION_CODE="$T10_REG_CODE" ${1:+-e VALHALLA_URL="$1"} "$T10_IMG"
-  for i in $(seq 1 60); do curl -s -m 2 "$T10_BASE/api/health" | grep -q '"ok":true' && return 0; sleep 1; done
-  docker logs --tail 80 "$T10_API"; return 1
+    -e REGISTRATION_CODE="$T10_REG_CODE" ${1:+-e VALHALLA_URL="$1"} "$T10_IMG_ID")"
+  local deadline=$((SECONDS + 60))
+  until curl -s -m 2 "$T10_BASE/api/health" | grep -q '"ok":true'; do
+    [ "$SECONDS" -lt "$deadline" ] || { docker logs --tail 80 "$T10_API_ID"; return 1; }
+    sleep 1
+  done
 }
 start_api ""
 ```
 
-- `docker rm -f "$T10_API"` трие само контейнера с това точно име, създаден от runbook-а.
-- Портът е само `127.0.0.1:18080`. Не го сменяй на `0.0.0.0` или на публичен адрес.
-- Очаквано: `{"ok":true,…}` до 60 s.
+- Портът е само `127.0.0.1`; не го сменяй на `0.0.0.0` или на публичен адрес.
+- Рестартът трие само записания `T10_API_ID` и само ако label-ът му е от този пуск.
 
-### Общи helper-и за заявки (NOT RUN)
+## 5. Общи helper-и и собственик (DRY-RUN)
 
+<!-- run:helpers -->
 ```bash
-J() { python3 -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1], {}, {'d': d}))" "$1"; }
-post() { curl -s -m 15 -o "$T10_DIR/out.json" -w '%{http_code}' -H 'Content-Type: application/json' ${3:+-H "Authorization: Bearer $3"} -X POST "$T10_BASE$1" -d "$2"; }
-OWNER=$(post /api/owner/register '{"company":"Synthetic Stage Co","name":"Synthetic Owner","email":"owner@stage.test","password":"synthetic-pass-123","registration_code":"'"$T10_REG_CODE"'"}' && J 'd["token"]' < "$T10_DIR/out.json")
+# post PATH JSON TOKEN NAME → тяло в $T10_DIR/NAME.json, HTTP статус в $T10_DIR/NAME.status; нищо на stdout
+post() {
+  curl -s -m 15 -o "$T10_DIR/$4.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+    ${3:+-H "Authorization: Bearer $3"} -X POST "$T10_BASE$1" -d "$2" > "$T10_DIR/$4.status" || true
+}
+status() { cat "$T10_DIR/$1.status"; }
+# field NAME a.b.0.c → стойността от $T10_DIR/NAME.json (низ дословно, иначе компактен JSON)
+field() {
+  python3 -c 'import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+for k in sys.argv[2].split("."):
+    d = d[int(k)] if isinstance(d, list) else d[k]
+print(d if isinstance(d, str) else json.dumps(d, separators=(",", ":"), ensure_ascii=False))' "$T10_DIR/$1.json" "$2"
+}
 PROFILE='{"heightM":4,"widthM":2.55,"lengthM":16.5,"grossWeightT":40,"axleLoadT":11.5,"axleCount":5,"hazmat":false}'
 PTS='"origin":{"lat":42.7,"lon":23.3},"destination":{"lat":43.2,"lon":27.9}'
+NOT_FOUND='Кодът е грешен или изтекъл — поискай нов от шефа'
 ```
 
-## 5. Сценарии
+<!-- run:owner -->
+```bash
+post /api/owner/register '{"company":"Synthetic Stage Co","name":"Synthetic Owner","email":"owner@stage.test","password":"synthetic-pass-123","registration_code":"'"$T10_REG_CODE"'"}' "" register
+test "$(status register)" = 200
+OWNER="$(field register token)"
+test -n "$OWNER"      # токенът не се отпечатва
+echo "owner ok"
+```
 
-За всеки сценарий запиши в доказателствата: команда, HTTP статус, ключови полета на тялото и `router_count` преди и след.
+## 6. Сценарии
 
-**Статус от автора:**
-- S1–S6 са **DRY-RUN (локално, без Docker)**. Пуснати са срещу uvicorn с `app.main:app`, web root, копиран както в Dockerfile, disposable PostgreSQL 16 и същия `router.py` на `127.0.0.1:8002`. Броят на заявките към fake router-а е броен от неговия лог.
-- В Docker сценариите са **NOT RUN**.
-- S5b не е изпълним без fault injection.
-- S7 е **NOT RUN**.
+Всеки блок спира при първото неизпълнено очакване (`set -e` + `test`). В доказателствата се записват изходът `… ok` и, при неуспех, статусът и `detail`; токени не се записват.
 
-| # | Сценарий | Стъпки | Очаквано | Покритие в CI на входа |
-|---|---|---|---|---|
-| S1 | Профилът липсва → 0 изходящи заявки | `before=$(router_count)`; `post /api/route-options "{$PTS}" "$OWNER"`; `after=$(router_count)` | `422`, `detail` = „Невалидни данни“; `after == before` | `test_route_options_missing_profile_rejects_before_egress_or_budget`, `…incomplete_profile…`, `…invalid_profile…`, `…access_bypass_options…` (`server/tests/test_api.py`) |
-| S2 | Маршрутизаторът не е настроен → 503, 0 изходящи заявки | API-то е стартирано **без** `VALHALLA_URL` (стъпка 5); `post /api/route-options "{$PTS,\"truckProfile\":$PROFILE}" "$OWNER"` | `503`, „Маршрутизаторът не е активиран“; `router_count` не се променя | `test_route_options_rejects_missing_or_invalid_router_without_egress`, `test_route_options_invalid_config_does_not_consume_budget` |
-| S3 | Валиден synthetic профил → точни truck полета към **fake** router | `start_api "http://${T10_ROUTER}:8002"` (токенът `OWNER` е в базата и остава валиден след рестарт на API контейнера); `post /api/route-options "{$PTS,\"truckProfile\":$PROFILE}" "$OWNER"`; `docker logs "$T10_ROUTER" \| grep ROUTER-REQUEST \| tail -1` | `200`, тялото е отговорът на fake router-а; в лога `costing_options.truck` = `{"height":4,"width":2.55,"length":16.5,"weight":40,"axle_load":11.5,"axle_count":5,"hazmat":false}`, `costing` = `truck`, `locations` без `label` | `test_route_options_maps_distinct_profiles_without_mutating_input`, `test_route_options_uses_explicit_router_and_bounded_payload` (с injected `urlopen`, не реален router) |
-| S4 | Два едновременни join за един код → 1 успех, 1 общ 404 | Създай шофьор: `post /api/drivers '{"name":"Synthetic Driver"}' "$OWNER"`, вземи `invite.code`; пусни два `curl -m 15 -X POST "$T10_BASE/api/join" -d '{"code":"<CODE>","device":"stage-a"}' & pA=$!` (и `stage-b` → `pB`), после `wait "$pA" "$pB"` (само тези два процеса, не общ `wait`) | Точно един `200` (с `token`) и един `404` „Кодът е грешен или изтекъл — поискай нов от шефа“; трети опит със същия код → `404` | `test_concurrent_join_claims_one_invite_once`, `test_five_concurrent_joins_leave_one_new_token_and_preserve_old_state`, `test_concurrent_normalized_invite_aliases_share_one_claim` |
-| S5 | Подновяване на покана срещу join без deadlock | Нов шофьор и код; паралелно `POST /api/drivers/<id>/invite` (собственик) и `POST /api/join` със стария код, всяка с `& p=$!`; `wait` само на двата PID-а | И двете завършват до 15 s, без timeout. Join-ът е или `200` (ако е бил пръв), или `404` (ако подновяването е обезсилило кода); новият код работи веднъж | `test_concurrent_join_and_reinvite_use_driver_then_invite_lock_order` |
-| S5b | Rollback и повторен опит след грешка при издаване на токен | **Не е изпълним** в staging без fault injection в кода. | — (не се прави) | Само `test_join_claim_rolls_back_if_token_issuance_fails` (CI) |
-| S6 | Шефският екран и helper-ът през HTTP с правилен MIME | `python3 -I scripts/check-served-web.py "$T10_BASE" --entry boss.html --ready-timeout 60 --request-timeout 10`; `curl -sI "$T10_BASE/ui/truck-profile-input.mjs"` | `PASS: 12 local files served … /boss.html`; `200`, `content-type: text/javascript; charset=utf-8` | CI стъпка „Шефският екран през HTTP…“ (INT-27, 12 файла по лог, прочетен от Codex) |
-| S7 | Изход, отложен отговор, презареждане → профилът е изчистен | Ръчно в браузър, виж 5.1 | Виж 5.1 | `ui/truck-profile-input.test.mjs`: „logout ends the local session at once while the server logout is pending (deferred response/error)“, „a provider line is not restored from the draft…“ (fake DOM в Node `vm`, не браузър) |
+| # | Сценарий | Очаквано | Покритие в CI на входа |
+|---|---|---|---|
+| S1 | Профилът липсва | `422`, `detail` = „Невалидни данни“; 0 заявки към router-а | `test_route_options_missing_profile_rejects_before_egress_or_budget`, `…incomplete_profile…`, `…invalid_profile…`, `…access_bypass_options…` |
+| S2 | Маршрутизаторът не е настроен | `503`, „Маршрутизаторът не е активиран“; 0 заявки | `test_route_options_rejects_missing_or_invalid_router_without_egress`, `test_route_options_invalid_config_does_not_consume_budget` |
+| S3 | Валиден synthetic профил към **fake** router | `200`, `trip.status=0`; точно 1 заявка; `costing=truck`, точните 7 truck полета, `locations` без `label` | `test_route_options_maps_distinct_profiles_without_mutating_input`, `test_route_options_uses_explicit_router_and_bounded_payload` (injected urlopen) |
+| S4 | Два едновременни join за един код | Един `200` с непразен токен и един `404` с общото съобщение; трети опит → `404` | `test_concurrent_join_claims_one_invite_once`, `test_five_concurrent_joins_leave_one_new_token_and_preserve_old_state`, `test_concurrent_normalized_invite_aliases_share_one_claim` |
+| S5 | Подновяване срещу join | И двете завършват до 15 s; подновяването е `200`; join-ът е `200` или `404`; новият код дава `200`, после `404` | `test_concurrent_join_and_reinvite_use_driver_then_invite_lock_order` |
+| S5b | Rollback при грешка при издаване на токен | Не е изпълним в staging без fault injection | Само `test_join_claim_rolls_back_if_token_issuance_fails` |
+| S6 | Шефският екран и helper-ът през HTTP | `PASS: 12 …/boss.html`, `PASS: 21 …/planner.html`; helper-ът е `200` с `text/javascript` | CI стъпки „Шефският екран през HTTP…“ и „Планировчикът през HTTP…“ |
+| S7 | Изход, отложен отговор, презареждане (ръчно) | Виж 6.1 | `ui/truck-profile-input.test.mjs` (Node `vm` с fake DOM, не браузър) |
 
-### 5.1 S7 — ръчни потребителски операции (NOT RUN)
+<!-- run:s1 -->
+```bash
+before="$(router_count)"
+post /api/route-options "{$PTS}" "$OWNER" s1
+test "$(status s1)" = 422
+test "$(field s1 detail)" = "Невалидни данни"
+test "$(router_count)" = "$before"
+echo "S1 ok"
+```
 
-Отвори `http://127.0.0.1:18080/boss.html` в браузър на същата машина. Използвай API-то от S3 (с fake router).
+<!-- run:s2 -->
+```bash
+before="$(router_count)"
+post /api/route-options "{$PTS,\"truckProfile\":$PROFILE}" "$OWNER" s2
+test "$(status s2)" = 503
+test "$(field s2 detail)" = "Маршрутизаторът не е активиран"
+test "$(router_count)" = "$before"
+echo "S2 ok"
+```
+
+<!-- run:s3 -->
+```bash
+start_api "http://${T10_ROUTER}:8002"          # OWNER е в базата и остава валиден
+before="$(router_count)"
+post /api/route-options "{$PTS,\"truckProfile\":$PROFILE}" "$OWNER" s3
+test "$(status s3)" = 200
+test "$(field s3 trip.status)" = 0
+test "$(router_count)" = "$((before + 1))"
+router_last > "$T10_DIR/s3-router.json"
+test "$(field s3-router costing)" = truck
+test "$(field s3-router costing_options.truck)" = '{"height":4,"width":2.55,"length":16.5,"weight":40,"axle_load":11.5,"axle_count":5,"hazmat":false}'
+test "$(field s3-router locations)" = '[{"lat":42.7,"lon":23.3},{"lat":43.2,"lon":27.9}]'
+echo "S3 ok"
+```
+
+<!-- run:s4 -->
+```bash
+post /api/drivers '{"name":"Synthetic Driver"}' "$OWNER" driver1
+test "$(status driver1)" = 200
+CODE="$(field driver1 invite.code)"
+post /api/join '{"code":"'"$CODE"'","device":"stage-a"}' "" joinA & pA=$!
+post /api/join '{"code":"'"$CODE"'","device":"stage-b"}' "" joinB & pB=$!
+wait "$pA" "$pB"
+test "$(printf '%s\n' "$(status joinA)" "$(status joinB)" | sort | tr '\n' ' ')" = "200 404 "
+for r in joinA joinB; do
+  if [ "$(status "$r")" = 200 ]; then test -n "$(field "$r" token)"; else test "$(field "$r" detail)" = "$NOT_FOUND"; fi
+done
+post /api/join '{"code":"'"$CODE"'","device":"stage-c"}' "" joinC
+test "$(status joinC)" = 404
+echo "S4 ok"
+```
+
+<!-- run:s5 -->
+```bash
+post /api/drivers '{"name":"Synthetic Driver Two"}' "$OWNER" driver2
+test "$(status driver2)" = 200
+D2="$(field driver2 driver.id)"; CODE2="$(field driver2 invite.code)"
+t0=$SECONDS
+post "/api/drivers/$D2/invite" '{}' "$OWNER" reinvite & p1=$!
+post /api/join '{"code":"'"$CODE2"'","device":"stage-d"}' "" join2 & p2=$!
+wait "$p1" "$p2"
+test "$((SECONDS - t0))" -le 15
+test "$(status reinvite)" = 200
+case "$(status join2)" in 200|404) ;; *) echo "join2: $(status join2)"; exit 1 ;; esac
+NEW="$(field reinvite invite.code)"
+post /api/join '{"code":"'"$NEW"'","device":"stage-e"}' "" join3
+test "$(status join3)" = 200
+post /api/join '{"code":"'"$NEW"'","device":"stage-f"}' "" join4
+test "$(status join4)" = 404
+echo "S5 ok (old-code join: $(status join2))"
+```
+
+<!-- run:s6 -->
+```bash
+python3 -I scripts/check-served-web.py "$T10_BASE" --entry boss.html --ready-timeout 60 --request-timeout 10 > "$T10_DIR/s6-boss.txt"
+grep -q '^PASS: 12 local files' "$T10_DIR/s6-boss.txt"
+python3 -I scripts/check-served-web.py "$T10_BASE" --ready-timeout 60 --request-timeout 10 > "$T10_DIR/s6-planner.txt"
+grep -q '^PASS: 21 local files' "$T10_DIR/s6-planner.txt"
+curl -s -m 15 -o /dev/null -D "$T10_DIR/s6-head.txt" "$T10_BASE/ui/truck-profile-input.mjs"
+grep -q '^HTTP/1.1 200' "$T10_DIR/s6-head.txt"
+grep -qi '^content-type: text/javascript' "$T10_DIR/s6-head.txt"
+echo "S6 ok"
+```
+
+### 6.1 S7 — ръчни потребителски операции (NOT RUN)
+
+Отвори `http://127.0.0.1:18080/boss.html` в браузър на същата машина, докато работи API-то от S3 (с fake router).
 
 1. „Влез“ с `owner@stage.test` / `synthetic-pass-123` и адрес на сървъра `http://127.0.0.1:18080`. Отвори „Маршрут“.
-2. Добави 2 точки с координати: `42.7, 23.3` и `43.2, 27.9`. Натисни „Варианти по пътищата“ с празен профил. **Очаквано:** съобщение за 7-те параметъра и фокус на „Височина“; `router_count` не се променя.
-3. Попълни `4,1 / 2.55 / 16.5 / 40 / 11.5 / 5 / Не` и натисни „Варианти“. **Очаквано:** 1 вариант, нищо не е избрано автоматично; в лога на fake router-а `height` е `4.1`.
-4. Избери варианта и промени „Височина“. **Очаквано:** вариантите изчезват, линията е махната, има съобщение.
-5. Избери отново вариант и презареди страницата. **Очаквано:** полетата за камиона са празни, а линията от маршрутизатора не се връща („няма избрана пътна геометрия“).
-6. Попълни профила и натисни „Излез“ (⚙). Изходът не чака сървъра; в този setup сървърът отговаря бързо, така че отложен отговор не може да се наблюдава ръчно без инструменти. **Очаквано:** веднага си на екрана за вход, полетата са празни, а в DevTools → Application → Local Storage няма `boss_token` и няма стойности от профила.
+2. Добави точките `42.7, 23.3` и `43.2, 27.9`. Натисни „Варианти по пътищата“ с празен профил. **Очаквано:** съобщение за 7-те параметъра и фокус на „Височина“; `router_count` не се променя.
+3. Попълни `4,1 / 2.55 / 16.5 / 40 / 11.5 / 5 / Не` и натисни „Варианти“. **Очаквано:** 1 вариант, нищо не е избрано автоматично; в `router_last` `height` е `4.1`.
+4. Избери варианта и промени „Височина“. **Очаквано:** вариантите и линията са махнати и има съобщение.
+5. Избери отново вариант и презареди страницата. **Очаквано:** полетата са празни и линията не се връща („няма избрана пътна геометрия“).
+6. Попълни профила и натисни „Излез“ (⚙). **Очаквано:** веднага си на екрана за вход, полетата са празни, а в Local Storage няма `boss_token` и стойности от профила. Отложен отговор на сървъра не може да се наблюдава ръчно без инструменти; той е покрит от `vm` тестовете в CI.
 
-### 5.2 Пакетиране и HTTP за planner (NOT RUN; повторение на CI)
+## 7. Почистване и проверка (NOT RUN)
 
+Почистването се изпълнява автоматично от `trap cleanup EXIT` (стъпка 0), включително при грешка. Проверка след изхода:
+
+<!-- run:docker-7 -->
 ```bash
-python3 -I scripts/check-served-web.py "$T10_BASE" --ready-timeout 60 --request-timeout 10
+# NOT RUN — в нов shell, със същия T10_RUN
+docker ps -a --filter "label=t10.stage.run=$T10_RUN" --format '{{.ID}} {{.Names}}'
+docker network ls --filter "label=t10.stage.run=$T10_RUN" --format '{{.ID}} {{.Name}}'
+docker images --filter "label=t10.stage.run=$T10_RUN" --format '{{.ID}} {{.Repository}}:{{.Tag}}'
 ```
 
-Очаквано: `PASS: 21 local files served … /planner.html`.
+- Очаквано: и трите команди не връщат редове.
+- Изтеглените базови образи (`python:3.13-slim`, `postgres:16`) не се пипат.
+- Ресурси, които са съществували преди пуска, остават непроменени.
 
-## 6. Почистване (NOT RUN; винаги, и при грешка)
+## 8. Доказателства
 
-```bash
-docker rm -f "$T10_API" "$T10_ROUTER" "$T10_DB" 2>/dev/null || true
-docker network rm "$T10_NET" 2>/dev/null || true
-docker image rm "$T10_IMG" 2>/dev/null || true
-rm -rf -- "$T10_DIR"
-unset T10_DB_PASSWORD
-docker ps -a --filter name='^t10-stage-' ; docker network ls --filter name='^t10-stage-'
-```
-
-- Трият се **само** ресурсите с имената от раздел 3. Изтеглените базови образи (`python:3.13-slim`, `postgres:16`) остават; махни ги само ако си ги изтеглил само за тази проверка.
-- Очаквано: последните две команди не показват `t10-stage-*` ресурси.
-
-## 7. Какво да се запише като доказателство
-
-- SHA (стъпка 0) и версиите на `docker version` и `python3 --version`.
-- За S1–S6: команда, статус, ключови полета и `router_count` преди и след. Без токени и без паролата на базата.
-- За S7: кой браузър и версия, и наблюдението по всяка точка.
-- Кои стъпки са **NOT RUN** и защо.
+- SHA, `T10_RUN`, `docker version`, `python3 --version`.
+- Изходите `… ok` от блоковете; при неуспех — блокът, статусът и `detail`. Без токени и без паролата на базата.
+- За S7: браузър и версия и наблюдението по всяка точка.
+- Кои стъпки са NOT RUN и защо.
 
 Този runbook проверява само заявения обхват. Зелен резултат не доказва реален маршрутизатор, ADR, физическа достоверност на въведения профил, пътна достъпност, правна пригодност или production готовност.
