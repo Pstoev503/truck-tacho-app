@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   PROFILE_FIELDS, createRouteOptionsController, parseTruckProfile, routeOptionsBody
 } from './truck-profile-input.mjs';
+import { MAX_PROVIDER_GEOMETRY_POINTS, ProviderGeometryError, providerGeometry } from './provider-geometry.mjs';
 
 // Synthetic values only.
 const FORM = Object.freeze({
@@ -552,6 +553,81 @@ test('boss.html (executed): a provider line is not restored from the draft and n
   // the original page labels the in-memory line as the router's
   assert.equal(page.boss.geomOrigin, 'provider');
   assert.match(page.$('rKm').textContent, /линията от маршрутизатора/);
+});
+
+test('provider geometry stays whole, joins legs, and enforces its total point limit', () => {
+  const a = [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }];
+  const b = [{ lat: 3, lon: 4 }, { lat: 5, lon: 6 }];
+  const exactLine = Array.from({ length: MAX_PROVIDER_GEOMETRY_POINTS }, (_, i) => ({ lat: i, lon: 0 }));
+  const decode = shape => ({ a, b, empty: [], invalid: null, full: exactLine })[shape];
+  assert.deepEqual(providerGeometry(null, decode), []);
+  assert.deepEqual(providerGeometry({ legs: null }, decode), []);
+  assert.deepEqual(providerGeometry({ legs: [{}] }, decode), []);
+  assert.deepEqual(providerGeometry({ legs: [{ shape: 'a' }] }, decode), a);
+  assert.deepEqual(providerGeometry({ legs: [{ shape: 'a' }, { shape: 'b' }] }, decode), [...a, b[1]]);
+  assert.deepEqual(providerGeometry({ legs: [{ shape: 'empty' }, { shape: 'a' }] }, decode), a);
+  assert.deepEqual(providerGeometry({ legs: [{ shape: 'a' }, { shape: 'empty' }, { shape: 'b' }] }, decode), [...a, b[1]]);
+  assert.deepEqual(providerGeometry({ legs: [{ shape: 'a' }, {}, { shape: 'b' }] }, decode), [...a, b[1]]);
+  assert.equal(providerGeometry({ legs: [{ shape: 'full' }] }, decode).length, MAX_PROVIDER_GEOMETRY_POINTS);
+  assert.throws(() => providerGeometry({ legs: [{ shape: 'invalid' }] }, decode),
+    error => error instanceof ProviderGeometryError && error.code === 'INVALID_GEOMETRY');
+  assert.throws(() => providerGeometry({ legs: [] }), TypeError);
+  assert.throws(() => providerGeometry({ legs: [{ shape: 'full' }, { shape: 'full' }] }, decode), error =>
+    error instanceof ProviderGeometryError && error.code === 'TOO_MANY_POINTS');
+});
+
+function encodedProviderLine(count) {
+  let text = '', lastLat = 0, lastLon = 0;
+  const encode = value => {
+    let v = value < 0 ? ~(value << 1) : value << 1, out = '';
+    while (v >= 0x20) { out += String.fromCharCode((0x20 | (v & 0x1f)) + 63); v >>= 5; }
+    return out + String.fromCharCode(v + 63);
+  };
+  for (let i = 0; i < count; i++) {
+    const lat = i % 2 ? 1000 : 0, lon = i * 1000;
+    text += encode(lat - lastLat) + encode(lon - lastLon);
+    lastLat = lat; lastLon = lon;
+  }
+  return text;
+}
+
+test('boss.html (executed): aggregate provider overflow is visible and leaves selection state untouched', async () => {
+  const shape = encodedProviderLine(MAX_PROVIDER_GEOMETRY_POINTS);
+  const answer = { trip: { legs: [{ shape }, { shape }], summary: { length: 401, time: 18600 } } };
+  const storage = loggedIn();
+  const page = await loadBoss({ storage, routes: { ...BASE_ROUTES, '/api/route-options': () => jsonResponse(answer) } });
+  await addTwoPoints(page);
+  await fillProfile(page);
+  await page.fire('routeOptions');
+  const geometryDraft = storage.getItem('boss_route_geometry');
+  const routeDraft = storage.getItem('boss_route_draft');
+  const routeSummary = page.$('rKm').textContent;
+  const waypointMarkup = page.$('pts').innerHTML;
+  await page.fire('routeOptionsList', 'click', page.$('routeOptionsList').children[0]);
+  assert.match(page.$('routeErr').textContent, /не може да бъде избран.*над 20000 точки/);
+  assert.equal(page.boss.geom.length, 0);
+  assert.equal(page.boss.geomOrigin, 'none');
+  assert.equal(page.boss.ctl.getState().providerSelected, false);
+  assert.equal(storage.getItem('boss_route_geometry'), geometryDraft);
+  assert.equal(storage.getItem('boss_route_draft'), routeDraft);
+  assert.equal(page.$('rKm').textContent, routeSummary);
+  assert.equal(page.$('pts').innerHTML, waypointMarkup);
+  assert.equal(page.boss.routeAlternatives.length, 1);
+});
+
+test('boss.html (executed): decoder failure is visible and leaves selection state untouched', async () => {
+  const answer = { trip: { legs: [{ shape: '?' }], summary: { length: 401, time: 18600 } } };
+  const page = await loadBoss({ storage: loggedIn(), routes: { ...BASE_ROUTES, '/api/route-options': () => jsonResponse(answer) } });
+  await addTwoPoints(page);
+  await fillProfile(page);
+  await page.fire('routeOptions');
+  const routeSummary = page.$('rKm').textContent;
+  await page.fire('routeOptionsList', 'click', page.$('routeOptionsList').children[0]);
+  assert.match(page.$('routeErr').textContent, /не може да бъде избран.*Невалидна геометрия/);
+  assert.equal(page.boss.geom.length, 0);
+  assert.equal(page.boss.geomOrigin, 'none');
+  assert.equal(page.boss.ctl.getState().providerSelected, false);
+  assert.equal(page.$('rKm').textContent, routeSummary);
 });
 
 test('boss.html (executed, positive control): a manual line is saved, restored and kept on a profile change', async () => {
