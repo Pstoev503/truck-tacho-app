@@ -210,6 +210,7 @@ import { totals } from './engine/activity-log.js';
 import { encodeRoute, googleMapsLinks, straightKm, cleanRoute, decodePolyline6 } from './engine/route.js';
 import { serverUrl, dayKey } from './engine/sync.js';
 import { PROFILE_FIELDS, createRouteOptionsController } from './ui/truck-profile-input.mjs';
+import { apiErrorMessage } from './ui/api-error-message.mjs';
 
 const H = 3600_000, DAY = 24 * H, MIN = 60_000;
 const $ = id => document.getElementById(id);
@@ -236,7 +237,7 @@ async function api(path, { method = 'GET', body } = {}) {
   if (res.status === 401 && S.token) { logoutLocal(); }
   if (!res.ok) {
     const d = data && data.detail;
-    throw new Error(res.status === 422 ? 'Провери полетата (паролата е поне 8 знака, имейлът да е истински, поне 2 точки в маршрута)' : typeof d === 'string' ? d : `Грешка ${res.status}`);
+    throw new Error(res.status === 422 ? apiErrorMessage(path, method, data) : typeof d === 'string' ? d : `Грешка ${res.status}`);
   }
   return data;
 }
