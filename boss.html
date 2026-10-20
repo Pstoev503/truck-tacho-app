@@ -212,6 +212,7 @@ import { serverUrl, dayKey } from './engine/sync.js';
 import { PROFILE_FIELDS, createRouteOptionsController } from './ui/truck-profile-input.mjs';
 import { apiErrorMessage } from './ui/api-error-message.mjs';
 import { ProviderGeometryError, providerGeometry } from './ui/provider-geometry.mjs';
+import { normalizeRouteOptionsResponse, ROUTE_OPTIONS_RESPONSE_ERROR_MESSAGE } from './ui/route-options-response.mjs';
 
 const H = 3600_000, DAY = 24 * H, MIN = 60_000;
 const $ = id => document.getElementById(id);
@@ -596,8 +597,13 @@ $('routeOptions').onclick = async () => {
   }
   if (out.status === 'stale') return;
   if (out.status === 'error') { $('routeOptionsList').textContent = out.error.message; return; }
-  const data = out.data;
-  routeAlternatives = [data?.trip, ...(data?.alternates || []).map(x => x.trip || x)].filter(x => x?.legs?.length);
+  try {
+    routeAlternatives = normalizeRouteOptionsResponse(out.data);
+  } catch {
+    routeAlternatives = [];
+    $('routeOptionsList').textContent = ROUTE_OPTIONS_RESPONSE_ERROR_MESSAGE;
+    return;
+  }
   renderRouteAlternatives();
 };
 $('routeOptionsList').onclick = e => {
