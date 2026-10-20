@@ -1,0 +1,122 @@
+name: Тестове
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Броячи, дневник, маршрути (Node)
+        working-directory: engine
+        run: node --test
+
+  ui-integration:
+    name: UI и integration (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # node --test exits 0 when a glob matches nothing, so missing files must fail here.
+      - name: Наличие на ui/*.test.mjs и integration/*.test.mjs
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for pattern in 'ui/*.test.mjs' 'integration/*.test.mjs'; do
+            files=($pattern)
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "::error::Няма тестови файлове за $pattern"
+              exit 1
+            fi
+            echo "$pattern: ${files[*]}"
+          done
+      - name: UI тестове (ui/*.test.mjs)
+        shell: bash
+        run: node --test ui/*.test.mjs
+      - name: Integration тестове (integration/*.test.mjs)
+        shell: bash
+        run: node --test integration/*.test.mjs
+
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: taho
+          POSTGRES_PASSWORD: taho
+          POSTGRES_DB: taho_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r server/requirements-dev.txt
+      - name: Сървър (PostgreSQL)
+        working-directory: server
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://taho:taho@localhost:5432/taho_test
+        run: python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    # Синтетична база само за HTTP проверката на образа; не е production и не е тайна.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: taho
+          POSTGRES_PASSWORD: taho
+          POSTGRES_DB: taho_http
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Образът на сървъра се сглобява
+        run: docker build -f server/Dockerfile -t top10eu-server .
+      # Проверява самия образ, не checkout-а: без порт, API, база или тайни.
+      - name: Картовият планировчик е в образа (planner.html, ui/ и локалните imports)
+        run: docker run --rm -i --network none top10eu-server python - /app/web < scripts/check-packaged-web.py
+      - name: Шефският екран е в образа (boss.html и imports от inline module)
+        run: docker run --rm -i --network none top10eu-server python - /app/web --entry boss.html < scripts/check-packaged-web.py
+      - name: HTTP checker-ът пада при невалидна услуга (локални fixtures)
+        run: python scripts/test-check-served-web.py
+      # Същият образ с реалния app.main:app (lifespan създава таблиците в базата),
+      # само на loopback на runner-а; портът не се публикува навън.
+      - name: Сървърът от образа тръгва на 127.0.0.1
+        run: >-
+          docker run -d --name top10eu-http --network host
+          -e DATABASE_URL=postgresql+psycopg://taho:taho@127.0.0.1:5432/taho_http
+          top10eu-server uvicorn app.main:app --host 127.0.0.1 --port 8000
+      - name: Планировчикът през HTTP (статус, MIME и локалните imports)
+        run: python scripts/check-served-web.py http://127.0.0.1:8000 --ready-timeout 60 --request-timeout 10
+      - name: Шефският екран през HTTP (статус, MIME и imports от inline module)
+        run: python scripts/check-served-web.py http://127.0.0.1:8000 --entry boss.html --ready-timeout 60 --request-timeout 10
+      - name: Лог на сървъра при грешка
+        if: failure()
+        run: docker logs --tail 80 top10eu-http 2>&1 || true
+      - name: Спиране на сървъра
+        if: always()
+        run: docker rm -f top10eu-http || true

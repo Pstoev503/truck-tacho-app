@@ -1,7 +1,2 @@
 __pycache__/
-
-# Android (Тахо сонда)
-android-sonda/.gradle/
-android-sonda/**/build/
-android-sonda/local.properties
-*.apk
+.pytest_cache/

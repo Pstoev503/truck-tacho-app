@@ -6,6 +6,8 @@
     <meta name="google" content="notranslate">
     <title>Truck Tacho Pro</title>
     <link rel="manifest" href="./manifest.json">
+    <link rel="stylesheet" href="./vendor/leaflet-1.9.4/leaflet.css">
+    <script src="./vendor/leaflet-1.9.4/leaflet.js"></script>
     <style>
         :root { --ui-scale: 1; }
         body{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:10px;display:flex;flex-direction:column;align-items:center;overflow-x:hidden}
@@ -152,6 +154,8 @@
         .os-speed { font-size:60px; font-weight:900; color:#F44336; margin-bottom:10px; }
         .os-timer { font-size:120px; font-weight:900; color:#F44336; line-height:1;}
         .os-controls { display:grid; grid-template-columns: 1fr 1fr; gap:10px; width:100%; margin-top:30px;}
+        .rt-btn { display:block; width:100%; box-sizing:border-box; background:#1a1a1a; color:#eee; border:2px solid #555; padding:13px; border-radius:10px; font-weight:bold; font-size:15px; cursor:pointer; text-align:center; text-decoration:none; }
+        .rt-btn.go { background:#1b5e20; border-color:#4CAF50; color:#fff; } .rt-btn.ok { border-color:#4CAF50; color:#4CAF50; }
         .os-btn { background:#fff; color:#F44336; border:3px solid #F44336; padding:15px; border-radius:10px; font-weight:bold; font-size:14px; cursor:pointer; text-transform:uppercase;}
 
         #border-modal {display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(33,150,243,0.95);z-index:10002;flex-direction:column;align-items:center;justify-content:center;padding:20px; box-sizing:border-box;}
@@ -212,6 +216,9 @@
             <span style="font-weight:bold; color:#F44336;">🚨 Аларма на екрана</span>
             <label class="switch"><input type="checkbox" id="os-alarm-toggle" checked onchange="setOverspeedOption('alarm', this.checked)"><span class="slider"></span></label>
         </div>
+        <div style="font-size:11px; color:#888; margin:12px 0 6px;">Фирма</div>
+        <div class="menu-item" id="company-box" style="flex-direction:column; align-items:stretch; gap:6px;"></div>
+        <a href="boss.html" class="rt-btn" style="margin:8px 0;">🔑 Шефско меню</a>
         <div style="font-size:11px; color:#888; margin:12px 0 6px;">Броячи по Регламент 561/2006</div>
         <div class="menu-item">
             <span style="font-weight:bold; color:#4CAF50;">🔊 Глас за паузи и почивки</span>
@@ -248,6 +255,18 @@
     <div class="warn-title">⚠️ Внимание!</div>
     <div class="warn-text" id="warning-msg-text">--</div>
     <button class="btn-warn-ok" onclick="closeWarningModal()">РАЗБРАХ</button>
+</div>
+
+<div id="route-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:10004; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;">
+    <div class="calib-card" style="border-color:#2196F3; max-height:90vh; overflow-y:auto; text-align:left;">
+        <h3 style="color:#2196F3; margin:0 0 4px;" id="route-title">Маршрут</h3>
+        <div style="font-size:12px; color:#aaa; margin-bottom:8px;" id="route-meta"></div>
+        <div style="font-size:14px; color:#ffcc80; margin-bottom:8px; white-space:pre-wrap;" id="route-notes"></div>
+        <div id="route-preview-map" style="height:260px; margin:8px 0; border-radius:10px; background:#111;"></div>
+        <ol style="margin:0 0 10px; padding-left:22px; font-size:14px; line-height:1.5;" id="route-points"></ol>
+        <div id="route-links" style="display:flex; flex-direction:column; gap:8px;"></div>
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;" id="route-actions"></div>
+    </div>
 </div>
 
 <div id="calib-modal">
@@ -312,6 +331,7 @@
         <div id="mod-ask" style="width:94%; text-align:center; margin:2px auto 8px;">
             <button onclick="askHowMuchLeft()" style="background:#111; border:2px solid #4CAF50; color:#fff; border-radius:12px; padding:10px 14px; font-size:15px; font-weight:bold; width:100%; cursor:pointer;">🔊 Колко ми остава?</button>
             <div id="tacho-answer" style="display:none; margin-top:6px; padding:8px 10px; border-left:4px solid #4CAF50; background:#111; color:#ddd; font-size:13px; line-height:1.35; border-radius:6px; text-align:left;"></div>
+            <div id="route-card" style="display:none; margin-top:8px;"></div>
         </div>
 
         <div class="info-box" id="mod-radio" style="border-left: 4px solid #00BCD4; margin-bottom: 10px; text-align:center;">
@@ -513,6 +533,13 @@ let lastResult = null;           // последният резултат от �
 let rulesVoice = true;           // глас за паузи и почивки
 let weeklyRestEndInput = null;   // въведен на ръка край на последната седмична почивка
 let shownWarnings = {};          // код на предупреждение → кога е показано
+
+// Връзка с фирмата (сървъра) и маршрути от шефа
+let conn = null;                 // { server, token, company, name, share }
+let syncTimer = null, syncBusy = false, syncFrom = null, lastSyncAt = 0, lastSyncError = '';
+// syncFrom: от кой момент сървърът трябва да се обнови (null = последните 3 дни, -Infinity = всичко)
+let routes = [];                 // маршрути от шефа: от сървъра или от връзка
+let lastFixAt = 0;               // кога е последното GPS местоположение
 const H_MS = 3600000;
 
 // Настройки
@@ -697,6 +724,7 @@ function loadData() {
 
     // дневникът на дейностите: текущата дейност продължава и след презареждане
     activityLog = window.tachoLog ? tachoLog.prune(tachoLog.parse(localStorage.getItem('th_activities') || '[]')) : [];
+    // без модулите дневникът не се чете — и не бива да се презаписва с празен (виж saveData)
     syncStateFromLog();
 }
 
@@ -708,7 +736,8 @@ function syncStateFromLog() {
 }
 
 function saveData() {
-    localStorage.setItem('th_activities', JSON.stringify(activityLog)); localStorage.setItem('th_calib', calibFactor);
+    if (window.tachoLog) localStorage.setItem('th_activities', JSON.stringify(activityLog));
+    localStorage.setItem('th_calib', calibFactor);
     localStorage.setItem('th_rules_voice', rulesVoice); localStorage.setItem('th_weekly_rest_end', weeklyRestEndInput || '');
     localStorage.setItem('th_course_dist', courseDistance); localStorage.setItem('th_shift_dist', shiftDistance);
     localStorage.setItem('th_jokers', JSON.stringify(jokers)); 
@@ -734,6 +763,15 @@ window.onload = function() {
     if(gpsEnabled) { startGPS(); setupDeviceFeatures(); } 
     buildCalendar(); updateJokerUI(); updateVisuals(); updateSpecialModeUI(); updateShiftButtonUI(); updateDistUI();
     updateUI(); setInterval(updateUI, 1000); 
+    loadConn(); loadRoutes(); renderCompanyBox(); renderRouteCard(); handleHash();
+    window.addEventListener('hashchange', handleHash);
+    // приложението е отворено два пъти (напр. от връзката): данните идват от другия раздел
+    window.addEventListener('storage', e => {
+        if (e.key === 'th_activities' && window.tachoLog) { activityLog = tachoLog.parse(e.newValue || '[]'); syncStateFromLog(); updateVisuals(); updateUI(); }
+        if (e.key === 'th_conn' || e.key === 'th_sync_from') { loadConn(); renderCompanyBox(); }
+        if (e.key === 'th_routes') { loadRoutes(); renderRouteCard(); }
+    });
+    setInterval(syncNow, 60000); scheduleSync(2000);
 };
 
 
@@ -1117,7 +1155,7 @@ function setManualState(newState) {
     if(currentState === 'rest' && isShiftActive && (newState === 'drive' || newState === 'work') && now - modeStartTime >= 9 * H_MS) handleShiftStop(true);
     activityLog = tachoLog.switchTo(activityLog, newState, now, { ferry: isFerryMode });
     syncStateFromLog();
-    saveData(); updateVisuals(); updateUI(); if(newState === 'drive') navTo('main'); 
+    saveData(); updateVisuals(); updateUI(); scheduleSync(); if(newState === 'drive') navTo('main'); 
 }
 
 function handleMainCircleClick() { if(currentState === 'rest') setManualState('drive'); else setManualState('rest'); }
@@ -1170,7 +1208,7 @@ function startGPS() {
                     if(loc.code) currentCountryCode = loc.code;
                 }
                 if(lastLat && lastLon) { let d = getGPSDistance(lastLat, lastLon, pos.coords.latitude, pos.coords.longitude); if(d > 0.005) { courseDistance += d; if(isShiftActive) shiftDistance += d; updateDistUI(); } }
-                lastLat = pos.coords.latitude; lastLon = pos.coords.longitude;
+                lastLat = pos.coords.latitude; lastLon = pos.coords.longitude; lastFixAt = Date.now();
             }, err => { stopGPS(); document.getElementById('gps-toggle').checked=false; }, { enableHighAccuracy: true }
         );
     }
@@ -1260,6 +1298,7 @@ function applyManualEntry() {
     try { activityLog = tachoLog.addManual(activityLog, { type, start: from, end: to }); }
     catch (e) { alert(e.message); return; }
     hasManualEntryToday = true; syncStateFromLog(); saveData(); updateVisuals(); updateUI(); closeManualModal();
+    markSyncFrom(from); scheduleSync();
     alert("Записано като [ВЪВЕДЕНО РЪЧНО].");
 }
 
@@ -1296,7 +1335,7 @@ function toggleOutMode() { isOutMode = !isOutMode; if(isOutMode) setManualState(
 function toggleFerryMode() {
     isFerryMode = !isFerryMode; document.getElementById('btn-mode-ferry').classList.toggle('active', isFerryMode);
     // почивката на ферибота се отбелязва: прекъсванията за качване и слизане не я развалят (чл. 9)
-    if (currentState === 'rest' && window.tachoLog) { activityLog = tachoLog.switchTo(activityLog, 'rest', Date.now(), { ferry: isFerryMode }); saveData(); updateUI(); }
+    if (currentState === 'rest' && window.tachoLog) { activityLog = tachoLog.switchTo(activityLog, 'rest', Date.now(), { ferry: isFerryMode }); saveData(); updateUI(); scheduleSync(); }
 }
 
 function archiveCurrentShift() {
@@ -1429,6 +1468,218 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// ==================== ФИРМА: ВРЪЗКА СЪС СЪРВЪРА ====================
+// Телефонът брои сам; на всяка минута (и след смяна на дейността) праща дневника,
+// кратък образ на броячите и смените на сървъра. Шефът ги вижда в boss.html.
+function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function loadConn() {
+    try { conn = JSON.parse(localStorage.getItem('th_conn') || 'null'); } catch (e) { conn = null; }
+    const f = localStorage.getItem('th_sync_from');
+    syncFrom = f === 'all' ? -Infinity : (f && isFinite(+f) ? +f : null);
+}
+function saveSyncFrom() { try { localStorage.setItem('th_sync_from', syncFrom == null ? '' : (syncFrom === -Infinity ? 'all' : String(syncFrom))); } catch (e) {} }
+function markSyncFrom(t) { syncFrom = syncFrom == null ? t : Math.min(syncFrom, t); saveSyncFrom(); }
+function saveConn() { try { localStorage.setItem('th_conn', conn ? JSON.stringify(conn) : 'null'); } catch (e) {} }
+
+async function apiCall(server, path, method = 'GET', body = null, token = '') {
+    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 15000);
+    let res;
+    try {
+        res = await fetch(server + path, { method, signal: ctrl.signal, body: body ? JSON.stringify(body) : undefined,
+            headers: Object.assign({ 'Content-Type': 'application/json' }, token ? { Authorization: 'Bearer ' + token } : {}) });
+    } catch (e) { throw new Error('Няма връзка със сървъра'); }
+    finally { clearTimeout(timer); }
+    let data = null; try { data = await res.json(); } catch (e) {}
+    if (!res.ok) { const err = new Error(data && typeof data.detail === 'string' ? data.detail : 'Грешка ' + res.status); err.status = res.status; throw err; }
+    return data;
+}
+
+async function joinCompany(code, server) {
+    server = window.tachoSync ? tachoSync.serverUrl(server) : '';
+    if (!server) throw new Error('Липсва адресът на сървъра — поискай връзката от шефа');
+    const out = await apiCall(server, '/api/join', 'POST', { code: code, device: (navigator.userAgent || '').slice(0, 100) });
+    conn = { server: server, token: out.token, company: out.company.name, name: out.user.name, share: false };
+    saveConn(); try { localStorage.setItem('th_server', server); } catch (e) {}
+    syncFrom = -Infinity; saveSyncFrom();  // новата фирма получава целия дневник
+    renderCompanyBox(); if (syncBusy) scheduleSync(1500); else syncNow();
+    return conn;
+}
+async function joinFromMenu() {
+    const code = (document.getElementById('join-code').value || '').trim();
+    const server = document.getElementById('join-server').value;
+    if (code.length < 4) { alert('Въведи кода от шефа'); return; }
+    try { const c = await joinCompany(code, server); alert('Свързан с ' + c.company + ' като ' + c.name + '.'); }
+    catch (e) { alert(e.message); }
+}
+async function leaveCompany() {
+    if (!conn || !confirm('Да изключа телефона от фирмата? Шефът няма да вижда броячите ти.')) return;
+    const c = conn; conn = null; saveConn(); renderCompanyBox();
+    try { await apiCall(c.server, '/api/logout', 'POST', null, c.token); } catch (e) {}
+}
+function setShareLocation(on) { if (!conn) return; conn.share = !!on; saveConn(); scheduleSync(500); }
+
+function scheduleSync(delay = 3000) { if (!conn) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, delay); }
+async function syncNow() {
+    if (!conn || syncBusy || !window.tachoSync || !window.tachoLog) return;
+    syncBusy = true;
+    const c = conn;
+    // дълго без връзка: изпращаме от последната успешна синхронизация
+    const lastOk = +localStorage.getItem('th_last_sync_ok') || 0;
+    if (lastOk && Date.now() - lastOk > tachoSync.SYNC_WINDOW_MS - 3600000) markSyncFrom(lastOk - 3600000);
+    const from = syncFrom;
+    try {
+        const now = Date.now();
+        const payload = tachoSync.syncPayload(activityLog, now, from);
+        payload.status = tachoSync.statusSnapshot(engineResult(now), now, { crew: isCrewMode, lastWeeklyRestEnd: weeklyRestEndInput });
+        payload.share_location = !!c.share;
+        // местоположение само ако шофьорът е разрешил и само докато работи (не в почивка)
+        if (c.share && lastLat != null && currentState !== 'rest' && now - lastFixAt < 10 * 60000) {
+            payload.position = { lat: lastLat, lon: lastLon, speed: Math.round(lastSpeedKmh), at: lastFixAt };
+        }
+        // местата на смяната (град, държава) — само ако шофьорът споделя местоположение
+        payload.shifts = tachoSync.recentShifts(shiftHistory, now).map(x => c.share ? x :
+            { day: x.day, data: Object.assign({}, x.data, { locStart: '', locEnd: '' }) });
+        const out = await apiCall(c.server, '/api/sync', 'PUT', payload, c.token);
+        if (conn !== c) return;  // междувременно е свързан с друг код
+        if (syncFrom === from) { syncFrom = null; saveSyncFrom(); }
+        lastSyncAt = Date.now(); lastSyncError = '';
+        try { localStorage.setItem('th_last_sync_ok', String(lastSyncAt)); } catch (e) {}
+        handleServerRoutes(out.routes || []);
+    } catch (e) {
+        if (conn !== c) return;
+        lastSyncError = e.message;
+        if (e.status === 401) { conn = null; saveConn(); showWarningModal('Телефонът е изключен от фирмата. Поискай нов код от шефа.'); }
+    } finally {
+        syncBusy = false; renderCompanyBox();
+        // нещо се промени, докато заявката вървеше (нов код, нов ръчен запис) — пак след малко
+        if (conn && (conn !== c || (syncFrom !== from && syncFrom !== null))) scheduleSync(1500);
+    }
+}
+
+function renderCompanyBox() {
+    const box = document.getElementById('company-box'); if (!box) return;
+    if (conn) {
+        box.innerHTML = '<span style="font-weight:bold; color:#4CAF50;">✅ ' + escHtml(conn.company) + '</span>' +
+            '<span style="font-size:12px; color:#aaa;">Ти си: ' + escHtml(conn.name) + ' · ' + (lastSyncAt ? 'изпратено в ' + fmtHour(new Date(lastSyncAt)) : 'още не е изпратено') +
+            (lastSyncError ? ' · ⚠️ ' + escHtml(lastSyncError) : '') + '</span>' +
+            '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:13px;"><span>📍 Шефът да вижда къде съм, докато работя</span>' +
+            '<label class="switch"><input type="checkbox" ' + (conn.share ? 'checked' : '') + ' onchange="setShareLocation(this.checked)"><span class="slider"></span></label></div>' +
+            '<button class="rt-btn" onclick="leaveCompany()">Изключи от фирмата</button>';
+    } else {
+        box.innerHTML = '<span style="font-weight:bold; color:#2196F3;">Свържи се с фирмата</span>' +
+            '<input id="join-code" class="calib-input" style="margin:0; font-size:18px;" placeholder="Код от шефа (XXXX-XXXX)" autocomplete="off">' +
+            '<input id="join-server" class="calib-input" style="margin:0; font-size:13px;" placeholder="Адрес на сървъра (https://…)" inputmode="url" value="' + escHtml(localStorage.getItem('th_server') || '') + '">' +
+            '<button class="rt-btn ok" onclick="joinFromMenu()">СВЪРЖИ</button>' +
+            '<span style="font-size:10px; color:#888;">Най-лесно: отвори връзката, която шефът ти праща — свързва се само.</span>';
+    }
+}
+
+// ==================== МАРШРУТИ ОТ ШЕФА ====================
+function loadRoutes() { try { routes = JSON.parse(localStorage.getItem('th_routes') || '[]') || []; } catch (e) { routes = []; } }
+function saveRoutes() { try { localStorage.setItem('th_routes', JSON.stringify(routes.slice(-20))); } catch (e) {} }
+function routeTime(r) { return r.added || r.created_at || 0; }
+function handleServerRoutes(list) {
+    const known = new Set(routes.filter(r => r.source === 'server').map(r => r.id));
+    const fresh = list.filter(r => !known.has(r.id));
+    routes = routes.filter(r => r.source !== 'server').concat(list.map(r => Object.assign({}, r, { source: 'server' })))
+        .sort((a, b) => routeTime(a) - routeTime(b));  // най-новият е последен
+    saveRoutes(); renderRouteCard();
+    // показваме записа от списъка (с отметка „от сървъра“), а не суровия отговор
+    const first = fresh.length ? routes.find(r => r.source === 'server' && r.id === fresh[0].id) : null;
+    if (first) { showRoute(first); if (rulesVoice) speakBg('Нов маршрут от шефа: ' + first.name); }
+}
+function renderRouteCard() {
+    const card = document.getElementById('route-card'); if (!card) return;
+    if (!routes.length) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    // най-новият отгоре, до 3 маршрута
+    let html = '';
+    for (let i = routes.length - 1; i >= Math.max(0, routes.length - 3); i--) {
+        const first = i === routes.length - 1;
+        html += '<button onclick="showRouteAt(' + i + ')" style="background:' + (first ? '#0d2a45' : '#111') + '; border:2px solid ' + (first ? '#2196F3' : '#333') +
+            '; color:#fff; border-radius:12px; padding:' + (first ? '10px' : '7px') + ' 14px; font-size:' + (first ? '15' : '13') + 'px; font-weight:bold; width:100%; cursor:pointer; margin-top:4px;">📍 ' + escHtml(routes[i].name) + '</button>';
+    }
+    card.innerHTML = html;
+}
+function showRouteAt(i) { if (routes[i]) showRoute(routes[i]); }
+let shownRoute = null;
+let routePreviewMap = null, routePreviewLayer = null;
+function renderRoutePreview(r) {
+    if (!window.L) return;
+    const exact = Array.isArray(r.geometry) && r.geometry.length > 1;
+    const line = (exact ? r.geometry : r.waypoints).map(p => [p.lat, p.lon]);
+    setTimeout(() => {
+        if (!routePreviewMap) {
+            routePreviewMap = L.map('route-preview-map');
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(routePreviewMap);
+            routePreviewLayer = L.layerGroup().addTo(routePreviewMap);
+        }
+        routePreviewMap.invalidateSize(); routePreviewLayer.clearLayers();
+        L.polyline(line, { color: '#2196F3', weight: 5, dashArray: exact ? null : '6 6' }).addTo(routePreviewLayer);
+        line.forEach((p, i) => L.circleMarker(p, { radius: i === 0 || i === line.length - 1 ? 7 : 4, color: '#fff', weight: 2, fillColor: i === 0 ? '#4CAF50' : i === line.length - 1 ? '#F44336' : '#2196F3', fillOpacity: 1 }).addTo(routePreviewLayer));
+        routePreviewMap.fitBounds(line, { padding: [18, 18], maxZoom: 14 });
+    }, 50);
+}
+function showRoute(r) {
+    shownRoute = r;
+    document.getElementById('route-title').innerText = '📍 ' + r.name;
+    document.getElementById('route-meta').innerText = (r.source === 'server' ? 'От шефа' : 'От връзка') + ' · ' + r.waypoints.length + ' точки' +
+        (window.tachoRoute ? ' · около ' + Math.round(tachoRoute.straightKm(r.waypoints)) + ' км по права линия' : '');
+    document.getElementById('route-notes').innerText = r.notes || '';
+    document.getElementById('route-points').innerHTML = r.waypoints.map((p, i) => '<li>' + escHtml(p.label || (p.lat.toFixed(4) + ', ' + p.lon.toFixed(4))) + '</li>').join('');
+    const links = window.tachoRoute ? tachoRoute.googleMapsLinks(r.waypoints) : [];
+    document.getElementById('route-links').innerHTML = links.map((u, i) =>
+        '<a href="' + escHtml(u) + '" target="_blank" rel="noopener" class="rt-btn go" style="font-size:17px;">▶ Навигация по точките' +
+        (links.length > 1 ? ' — етап ' + (i + 1) + ' от ' + links.length : '') + ' (Google Maps може да предложи друго трасе)</a>').join('') +
+        '<button class="rt-btn" onclick="downloadRouteGpx()">⬇ GPX за друга навигация</button>';
+    let acts = '';
+    if (r.source === 'server' && conn) acts += '<button class="rt-btn ok" style="flex:1;" onclick="markRoute(\'done\')">🏁 Минат</button>';
+    else acts += '<button class="rt-btn" style="flex:1;" onclick="removeShownRoute()">Махни</button>';
+    acts += '<button class="rt-btn" style="flex:1;" onclick="closeRouteModal()">Затвори</button>';
+    document.getElementById('route-actions').innerHTML = acts;
+    document.getElementById('route-modal').style.display = 'flex';
+    renderRoutePreview(r);
+    if (r.source === 'server' && r.status === 'new' && conn) markRoute('seen', true);
+}
+function closeRouteModal() { document.getElementById('route-modal').style.display = 'none'; }
+function downloadRouteGpx() {
+    if (!shownRoute || !window.tachoRoute) return;
+    const blob = new Blob([tachoRoute.gpx(shownRoute)], { type: 'application/gpx+xml' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = (shownRoute.name || 'marshrut').replace(/[\\/:*?"<>|]+/g, '_') + '.gpx';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function removeShownRoute() { routes = routes.filter(r => r !== shownRoute); saveRoutes(); renderRouteCard(); closeRouteModal(); }
+async function markRoute(status, quiet) {
+    const r = shownRoute; if (!r || !conn) return;
+    try {
+        await apiCall(conn.server, '/api/routes/' + r.id, 'PATCH', { status: status }, conn.token);
+        r.status = status;
+        if (status === 'done') { routes = routes.filter(x => x !== r); closeRouteModal(); }
+        saveRoutes(); renderRouteCard();
+    } catch (e) { if (!quiet) alert(e.message); }
+}
+
+// връзки: #route=… (маршрут без сървър) и #join=…&server=… (покана от шефа)
+async function handleHash() {
+    if (!window.tachoRoute || !location.hash || location.hash.length < 3) return;
+    const raw = location.hash, h = tachoRoute.parseHash(raw);
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    if (h.route) {
+        const r = Object.assign({}, h.route, { source: 'link', id: 'link-' + Date.now(), added: Date.now() });
+        routes.push(r); saveRoutes(); renderRouteCard(); showRoute(r);
+    } else if (/(^|[#&])route=/.test(raw)) { alert('Връзката за маршрут е повредена.'); }
+    if (h.join) {
+        const server = tachoSync.serverUrl(h.server || (conn && conn.server) || localStorage.getItem('th_server'));
+        if (!server) { alert('Връзката за покана няма валиден адрес на сървър (трябва да е https). Поискай нова от шефа.'); return; }
+        const host = new URL(server).host;
+        if (conn && !confirm('Телефонът вече е свързан с ' + conn.company + '. Да го свържа с новия код към ' + host + '?')) return;
+        if (!conn && !confirm('Да свържа телефона с фирмата на сървъра ' + host + ' (код ' + h.join + ')? Шефът ще вижда броячите ти.')) return;
+        try { const c = await joinCompany(h.join, server); alert('Свързан с ' + c.company + ' като ' + c.name + '. Шефът вече вижда броячите ти.'); }
+        catch (e) { alert(e.message); }
+    }
+}
+
 // ==================== РАДИО СТАНЦИЯ (ДИНАМИЧНА) ====================
 let wsRadio = null;
 let activeRadioStream = null;
@@ -1558,7 +1809,11 @@ function setupMainPttControls() {
 import { createOverspeedWatch } from './engine/overspeed.js';
 import { analyze, describe, clock, weekStart } from './engine/tacho-rules.js';
 import * as tachoLog from './engine/activity-log.js';
+import * as tachoRoute from './engine/route.js';
+import * as tachoSync from './engine/sync.js';
 window.createOverspeedWatch = createOverspeedWatch;
+window.tachoRoute = tachoRoute;
+window.tachoSync = tachoSync;
 window.tachoEngine = { analyze, describe, clock, weekStart };
 window.tachoLog = tachoLog;
 </script>

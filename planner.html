@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="bg">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <title>Ръчна скица и ориентировъчен график</title>
+  <link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css">
+  <link rel="stylesheet" href="ui/map-planner.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Първи екран за планиране</p>
+      <h1>Маршрут и ориентировъчен график</h1>
+      <p>Това е ръчна скица, не проверен пътен маршрут. Пътищата и ограниченията за камиони не са проверени.</p>
+    </header>
+
+    <section class="card">
+      <h2>1. Начертай маршрута</h2>
+      <p>Натисни върху картата за подредени точки. Премести маркер с плъзгане, за да редактираш линия. Нужни са поне две различни валидни точки.</p>
+      <div class="mode">Ръчна скица — пътищата не са проверени</div>
+      <div id="map" role="application" aria-label="Карта за ръчно чертане на маршрут"></div>
+      <p id="map-window-caption" class="notice" aria-live="polite" hidden></p>
+      <div class="controls">
+        <button id="remove-last" type="button">Премахни последната точка</button>
+        <button id="clear-route" class="secondary" type="button">Изчисти маршрута</button>
+      </div>
+      <ol id="points" aria-label="Точки по маршрута"></ol>
+      <div id="sections" class="sections" aria-label="Участъци и избори"></div>
+      <h3>Подготовка във файл</h3>
+      <p class="notice">Файлът пази само точките, типовете път, изборите по участъци, потеглянето и паузата. Не пази дневника, профил, паркинг списъка или изчислен график. Относителното потегляне се отчита от момента на следващото планиране. Файлът не доказва проверен пътен маршрут, законност или достоверна история.</p>
+      <div class="controls">
+        <button id="draft-save" class="secondary" type="button">Запази подготовката във файл</button>
+      </div>
+      <label for="draft-file">Зареди подготовка от файл (JSON)</label>
+      <input id="draft-file" type="file" accept=".json,application/json">
+      <p id="draft-status" class="history-status" aria-live="polite">Подготовката не е запазвана или зареждана от файл.</p>
+    </section>
+
+    <section class="card">
+      <h2>2. Начален дневник</h2>
+      <p>По желание използвай дневника само от този браузър. Самоличността и достоверността му не са независимо потвърдени.</p>
+      <div class="controls">
+        <button id="history-use" type="button">Използвай дневника от това устройство</button>
+        <button id="history-refresh" class="secondary" type="button" hidden>Опресни дневника</button>
+        <button id="history-none" class="secondary" type="button">Продължи без начална история</button>
+      </div>
+      <p id="history-status" class="history-status" aria-live="polite">Без начална история. Избери дневника от устройството или продължи без него.</p>
+    </section>
+
+    <section class="card">
+      <h2>3. Потегляне</h2>
+      <label for="departure-mode">Час на потегляне</label>
+      <select id="departure-mode">
+        <option value="now">Сега</option>
+        <option value="relative">След избран интервал</option>
+        <option value="absolute">На дата и час</option>
+      </select>
+      <div id="relative-inputs" class="relative-inputs" hidden>
+        <label>След <input id="departure-hours" type="number" min="0" max="720" value="0"> часа и
+          <input id="departure-minutes" type="number" min="0" max="59" value="0"> минути</label>
+      </div>
+      <div id="absolute-inputs" class="relative-inputs" hidden>
+        <label for="departure-date">Дата (Europe/Sofia)</label>
+        <input id="departure-date" type="date" min="2000-01-01" max="2099-12-31">
+        <label for="departure-time">Час (Europe/Sofia)</label>
+        <input id="departure-time" type="time" step="60">
+        <div id="departure-fold-block" hidden>
+          <label for="departure-fold">Този час настъпва два пъти (връщане към зимно време)</label>
+          <select id="departure-fold"></select>
+        </div>
+        <p id="departure-status" class="history-status" aria-live="polite"></p>
+      </div>
+      <p class="notice">Потегляне сега, след избран интервал или на дата и час. Датата и часът са по часовата зона Europe/Sofia, независимо от настройката на устройството. Час, който не съществува при преминаване към лятно време, не се приема; при двойно настъпване се избира изрично.</p>
+      <label for="break-style">Пауза по време на управление</label>
+      <select id="break-style">
+        <option value="45">45 мин наведнъж</option>
+        <option value="15+30">15 + 30 мин</option>
+      </select>
+      <p class="notice">Отнася се само за паузата при непрекъснато управление. Не променя дневната почивка (9 или 11 ч) и заявката за 10 ч управление по участъци. Паузите се разпределят от планирането; графикът остава ориентировъчен.</p>
+      <button id="plan" class="primary" type="button">Планирай</button>
+      <p id="message" class="message" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="parking-heading">
+      <h2 id="parking-heading">Паркинги по маршрута</h2>
+      <p>По желание избери локален JSON файл със списък паркинги (до 1 MiB и 1000 записа). Файлът се чете само в този браузър: не се изтегля, не се записва и не се изпраща.</p>
+      <p class="caution">Само преглед на кандидати по начертаната линия. Не се избира и не се резервира паркинг. Подходът, посоката, достъпът за камиони и свободните места не са проверени. Графикът и почивките не се променят.</p>
+      <label for="parking-file">Локален файл с паркинги (JSON)</label>
+      <input id="parking-file" type="file" accept=".json,application/json">
+      <p id="parking-status" class="history-status" aria-live="polite">Няма зареден списък с паркинги.</p>
+      <div class="parking-fields">
+        <label for="parking-from-km">От км <span class="muted">(празно = началото)</span>
+          <input id="parking-from-km" type="number" min="0" step="0.1" inputmode="decimal"></label>
+        <label for="parking-to-km">До км <span class="muted">(празно = края)</span>
+          <input id="parking-to-km" type="number" min="0" step="0.1" inputmode="decimal"></label>
+        <label for="parking-max-m">До метра от линията
+          <input id="parking-max-m" type="number" min="0" max="5000" step="10" value="500" inputmode="numeric"></label>
+      </div>
+      <label for="rest-lookback-km">Преглед назад от избрана пауза (км)
+        <input id="rest-lookback-km" type="number" min="0.1" max="200" step="1" value="20" inputmode="decimal"></label>
+      <p class="notice">„Прегледай паркинги преди тази пауза“ в графика задава участъка по линията до паузата (по подразбиране 20 км назад). Това е само удобство за преглед: паркингът, подходът, достъпът, достижимостта и наличността не са потвърдени, нищо не се резервира и графикът не се променя спрямо паркинга.</p>
+      <p id="parking-rest" class="muted" aria-live="polite"></p>
+      <div class="controls">
+        <button id="parking-window-show" class="secondary" type="button" disabled>Покажи избрания участък на картата</button>
+      </div>
+      <div class="controls">
+        <button id="parking-evaluate" type="button" disabled>Оцени паркингите по маршрута</button>
+        <button id="parking-clear" class="secondary" type="button" disabled>Изчисти списъка с паркинги</button>
+      </div>
+      <p id="parking-message" class="message" aria-live="polite"></p>
+      <p id="parking-summary" class="muted"></p>
+      <ul id="parking-results" class="parking-results" aria-label="Оценени паркинги"></ul>
+    </section>
+
+    <section id="schedule-card" class="card" hidden>
+      <h2>Ориентировъчен график</h2>
+      <p class="caution">Ориентировъчно изчисление — не е потвърждение на право или законно съответствие.</p>
+      <p id="times"></p>
+      <ul id="warnings" class="warnings"></ul>
+      <h3>Планирани действия</h3>
+      <ol id="schedule"></ol>
+      <div id="stage-detail" class="history-status" aria-live="polite"></div>
+      <div class="controls">
+        <button id="stage-clear" class="secondary" type="button" disabled>Изчисти избрания етап</button>
+      </div>
+      <h3>Допускания</h3>
+      <ul id="assumptions"></ul>
+    </section>
+  </main>
+  <script src="vendor/leaflet-1.9.4/leaflet.js"></script>
+  <script type="module" src="ui/map-planner.mjs"></script>
+</body>
+</html>
