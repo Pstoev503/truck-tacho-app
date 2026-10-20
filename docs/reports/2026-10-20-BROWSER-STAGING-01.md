@@ -122,7 +122,44 @@
 
 ## 6. CI (реален браузър и реален Docker)
 
-Попълва се след пуска.
+Отчетът не може да съдържа пуска, който неговият собствен commit задейства. Затова тук е първият пуск, на `bfd890c`. Крайният head и неговият пуск са в предаването в #167.
+
+**Пуск на `bfd890c0b658f5069ac9bdeaba29daff51e75c92`**
+
+- run [39470610191](https://github.com/Pstoev503/truck-tacho-app/actions/runs/39470610191), job 118793375710, 17:57:57–17:59:12Z, success. Прочетени са метаданните на стъпките и `::notice` анотациите.
+- **Версии** (действително стартирани):
+  - Google Chrome 155.0.8059.84, `/usr/bin/google-chrome`, вече наличен на runner-а; `Browser.getVersion` след стартиране: `Chrome/155.0.8059.84`, protocol 1.3;
+  - Node v22.23.3 (`actions/setup-node@v4`, 22);
+  - Python 3.13.16;
+  - Docker server 28.0.4;
+  - Ubuntu 24.04.5 LTS.
+- **Входове:** APP `9c6fbc9…`, v2 blob `f0d7750…`, harness `bfd890c…`.
+- **Тестове без браузър** (не са S7):
+  - driver: `# tests 10 # pass 10 # fail 0`;
+  - runner: `Ran 16 tests; failures 0, errors 0, skipped 0; OK`.
+- **Реален Docker пуск, S1–S6:**
+  - пакетиране: `PASS: 21 … planner.html`, `PASS: 15 … boss.html`;
+  - `owner ok`; S1–S4 `ok`; S5 `ok (old-code join: 200)`;
+  - 36 реда `S6 served …` с точен MIME;
+  - `S6 ok (served = packaged; planner 21, boss 15; exact MIME per file)`.
+- **S7 в реалния браузър** (дословни редове):
+  - `S7 browser launched: Chrome/155.0.8059.84 (protocol 1.3); Node v22.23.3; headless; own profile dir`
+  - за `desktop-1280` и за `mobile-375` — стъпки 1–6 `ok`, както са описани в раздел 3. Стъпка 3: `router requests +1, costing truck, height 4.1 (typed "4,1")`. Стъпка 6: `logout → login screen, no boss_token, 7 fields blank while the server logout was paused 2000 ms; then resumed, HTTP 200`;
+  - `S7 desktop-1280 ok (1280x900): 0 JS exceptions, 46 external requests blocked`
+  - `S7 mobile-375 ok (375x812 mobile): 0 JS exceptions, 16 external requests blocked`
+- **Почистване:**
+  - `bash exit 0`;
+  - не е останал container, network или image с `t10.stage.run=20261020175820-2741`;
+  - не е останал процес с временната директория на пуска, включително браузърът;
+  - 48 s, `RESULT: PASS`.
+- **Ограничение на доказателството от този пуск.** Анотацията беше отрязана около 4 KB след `S7 js exceptions: 0 (Runtime.exceptionThrow`. Затова последните редове (общият брой блокирани заявки, `S7 ok …` и `S7 cleanup …`) не се виждат в нея. Те са сред задължителните маркери, така че `RESULT: PASS` означава, че са отпечатани, но аз не съм ги прочел пряко. В крайния head изходът е разделен на две анотации (S1–S6 и S7), а заглавията на анотациите са без запетаи, защото запетаята ги отрязваше. Механиката на проверките не е променена.
+
+| Сценарий | Статус на `bfd890c` |
+|---|---|
+| S1–S6 | PASS в реален disposable Docker |
+| S7 (1280 и 375) | PASS в реален headless Chrome 155 срещу synthetic API и fake router |
+| S7, изход със задържана заявка към сървъра | PASS (задържане 2000 ms, после HTTP 200) |
+| S5b | NOT RUN |
 
 ## 7. Ограничения
 

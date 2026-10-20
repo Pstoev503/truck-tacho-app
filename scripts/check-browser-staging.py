@@ -344,7 +344,9 @@ def main(argv=None):
         return 2
     elapsed = time.monotonic() - started
     evidence = [line for line in log.getvalue().splitlines() if EVIDENCE.match(line)]
-    annotate("runbook output", "\n".join(evidence) or "no expected lines")
+    # one annotation per part: a single notice is cut at about 4 KB
+    annotate("runbook output S1-S6", "\n".join(e for e in evidence if not e.startswith("S7 ")) or "no expected lines")
+    annotate("browser output S7", "\n".join(e for e in evidence if e.startswith("S7 ")) or "no S7 lines")
     for line in summary:
         print(("PASS " if ok else "INFO ") + line)
     annotate("cleanup and result", "\n".join(summary + [f"elapsed {elapsed:.0f}s", "RESULT: " + ("PASS" if ok else "FAIL")]))

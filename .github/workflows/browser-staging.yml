@@ -45,7 +45,7 @@ jobs:
       - name: Unit тестове на driver-а (без браузър; не са S7)
         run: |
           node --test --test-reporter=tap harness/scripts/browser-staging.test.mjs | tee driver-tests.tap
-          echo "::notice title=driver unit tests (no browser, not S7)::$(grep -E '^# (tests|pass|fail|cancelled)' driver-tests.tap | tr '\n' ' ')"
+          echo "::notice title=driver unit tests - no browser - not S7::$(grep -E '^# (tests|pass|fail|cancelled)' driver-tests.tap | tr '\n' ' ')"
       - name: Тестове на runner-а със stub docker и фалшиви driver-и (не са S7)
         env:
           APP_DIR: ${{ github.workspace }}/app

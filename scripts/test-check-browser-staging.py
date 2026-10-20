@@ -339,7 +339,7 @@ class EvidenceTests(unittest.TestCase):
 if __name__ == "__main__":
     result = unittest.main(verbosity=2, exit=False).result
     passed = result.wasSuccessful()
-    st.annotate("runner tests (stubs, not S7)", f"Ran {result.testsRun} tests; failures {len(result.failures)}, "
+    st.annotate("runner tests - stubs - not S7", f"Ran {result.testsRun} tests; failures {len(result.failures)}, "
                                                  f"errors {len(result.errors)}, skipped {len(result.skipped)}; "
                                                  + ("OK" if passed else "FAILED"))
     sys.exit(0 if passed else 1)
