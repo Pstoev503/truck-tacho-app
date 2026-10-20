@@ -469,6 +469,32 @@ def test_join_lock_is_released_before_database_lookup(client):
     assert acquired_during_query and all(acquired_during_query)
 
 
+def test_concurrent_join_claims_one_invite_once(client):
+    boss = register(client)
+    code = add_driver(client, boss)["invite"]["code"]
+    both_looked_up_invite = threading.Barrier(2)
+    invite_lookups = []
+
+    def wait_after_invite_lookup(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "from invites" in statement.lower() and "code_hash" in statement.lower():
+            invite_lookups.append(statement)
+            both_looked_up_invite.wait(timeout=5)
+
+    def concurrent_join(_index):
+        with TestClient(main.app) as concurrent_client:
+            return concurrent_client.post("/api/join", json={"code": code})
+
+    event.listen(engine, "after_cursor_execute", wait_after_invite_lookup)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(concurrent_join, range(2)))
+    finally:
+        event.remove(engine, "after_cursor_execute", wait_after_invite_lookup)
+
+    assert len(invite_lookups) == 2
+    assert sorted(response.status_code for response in responses) == [200, 404]
+
+
 def test_concurrent_same_code_requests_reserve_no_more_than_ten_lookups(client):
     with ThreadPoolExecutor(max_workers=20) as pool:
         statuses = list(pool.map(
