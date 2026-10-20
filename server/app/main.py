@@ -365,6 +365,7 @@ def join(body: JoinIn, request: Request, db: Session = Depends(get_db)):
     )
     if claimed_user_id is None:
         raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
+    db.scalar(select(User.id).where(User.id == d.id).with_for_update())
     # един телефон на шофьор: старите входове спират
     db.execute(update(AuthToken).where(AuthToken.user_id == d.id).values(revoked=True))
     token = issue_token(db, d, body.device or "телефон")

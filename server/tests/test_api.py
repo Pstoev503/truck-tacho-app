@@ -517,6 +517,47 @@ def test_join_claim_rolls_back_if_token_issuance_fails(client, monkeypatch):
         assert db.query(AuthToken).filter(AuthToken.user_id == out["driver"]["id"]).count() == 0
 
 
+def test_concurrent_joins_with_distinct_invites_leave_one_active_token(client):
+    boss = register(client)
+    out = add_driver(client, boss)
+    old_code = out["invite"]["code"]
+    new_code = client.post(
+        f"/api/drivers/{out['driver']['id']}/invite", headers=auth(boss)
+    ).json()["invite"]["code"]
+    with SessionLocal() as db:
+        old_invite = db.query(Invite).filter(
+            Invite.code_hash == main.fingerprint(main.normalize_code(old_code))
+        ).one()
+        old_invite.expires_at = int(time.time() * 1000) + DAY
+        db.commit()
+
+    both_looked_up_invites = threading.Barrier(2)
+
+    def wait_after_invite_lookup(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "from invites" in statement.lower() and "code_hash" in statement.lower():
+            both_looked_up_invites.wait(timeout=5)
+
+    def concurrent_join(code):
+        with TestClient(main.app) as concurrent_client:
+            return concurrent_client.post("/api/join", json={"code": code})
+
+    event.listen(engine, "after_cursor_execute", wait_after_invite_lookup)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(concurrent_join, (old_code, new_code)))
+    finally:
+        event.remove(engine, "after_cursor_execute", wait_after_invite_lookup)
+
+    assert [response.status_code for response in responses] == [200, 200]
+    with SessionLocal() as db:
+        active_tokens = db.query(AuthToken).filter(
+            AuthToken.user_id == out["driver"]["id"], AuthToken.revoked.is_(False)
+        ).all()
+        assert len(active_tokens) == 1
+        active_hash = active_tokens[0].token_hash
+    assert sum(main.fingerprint(response.json()["token"]) == active_hash for response in responses) == 1
+
+
 def test_concurrent_same_code_requests_reserve_no_more_than_ten_lookups(client):
     with ThreadPoolExecutor(max_workers=20) as pool:
         statuses = list(pool.map(
