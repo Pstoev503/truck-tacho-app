@@ -43,16 +43,23 @@ function fromB64url(s) {
   return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
 }
 
-/** Valhalla encoded polyline, precision 6. */
+/** Valhalla encoded polyline, precision 6. Strict: only chars 63..126, bounded varints, finite in-range coordinates. */
 export function decodePolyline6(encoded) {
+  if (typeof encoded !== 'string') throw new Error('Невалидна геометрия');
   const out = []; let index = 0, lat = 0, lon = 0;
   const next = () => {
     let result = 0, shift = 0, b;
-    do { if (index >= encoded.length || shift > 30) throw new Error('Невалидна геометрия'); b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    return (result & 1) ? ~(result >> 1) : (result >> 1);
+    do {
+      if (index >= encoded.length || shift > 30) throw new Error('Невалидна геометрия');
+      const c = encoded.charCodeAt(index++);
+      if (c < 63 || c > 126) throw new Error('Невалидна геометрия');
+      b = c - 63; result += (b & 0x1f) * 2 ** shift; shift += 5;
+    } while (b >= 0x20);
+    return result % 2 ? -(result + 1) / 2 : result / 2;
   };
   while (index < encoded.length) {
     lat += next(); lon += next();
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90e6 || Math.abs(lon) > 180e6) throw new Error('Невалидна геометрия');
     out.push({ lat: lat / 1e6, lon: lon / 1e6 });
     if (out.length > MAX_GEOMETRY_POINTS) throw new Error('Твърде много точки');
   }
