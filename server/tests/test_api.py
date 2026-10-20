@@ -778,6 +778,7 @@ def test_concurrent_join_and_reinvite_use_driver_then_invite_lock_order(client):
     join_future = None
     join_pool = None
     join_listener = None
+    join_error = None
     try:
         def renew_invite():
             with TestClient(main.app, raise_server_exceptions=False) as c:
@@ -796,15 +797,22 @@ def test_concurrent_join_and_reinvite_use_driver_then_invite_lock_order(client):
         time.sleep(0.05)
     finally:
         release_renewal.set()
-        if join_future is not None:
-            join_response = join_future.result(timeout=10)
-        renewal_response = renewal_future.result(timeout=10)
-        if join_listener is not None:
-            event.remove(engine, "before_cursor_execute", join_listener)
-        event.remove(engine, "after_cursor_execute", pause_after_invite_expiry_update)
-        if join_pool is not None:
-            join_pool.shutdown(wait=True)
-        renewal_pool.shutdown(wait=True)
+        try:
+            if join_future is not None:
+                try:
+                    join_response = join_future.result(timeout=10)
+                except Exception as exc:
+                    join_error = exc
+            renewal_response = renewal_future.result(timeout=10)
+        finally:
+            if join_listener is not None:
+                event.remove(engine, "before_cursor_execute", join_listener)
+            event.remove(engine, "after_cursor_execute", pause_after_invite_expiry_update)
+            if join_pool is not None:
+                join_pool.shutdown(wait=True)
+            renewal_pool.shutdown(wait=True)
+    if join_error is not None:
+        raise join_error
 
     assert renewal_response.status_code == 200
     assert join_response.status_code == 404
