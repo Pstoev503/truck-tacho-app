@@ -293,7 +293,12 @@ $('loginForm').onsubmit = async ev => {
 };
 $('routeOnly').onclick = () => { S.routeOnly = true; applyMode(); show('route'); };
 function logoutLocal() { S.token = ''; S.user = null; S.company = null; store.set('boss_token', null); clearTruckProfile(); applyMode(); show('login'); }
-$('logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); } catch {} logoutLocal(); };
+$('logout').onclick = () => {
+  // заявката към сървъра взима текущия вход още тук; локалният изход не чака отговора
+  const revoke = api('/api/logout', { method: 'POST' });
+  logoutLocal();
+  revoke.catch(() => {});
+};
 $('saveServer').onclick = () => {
   const v = serverUrl($('serverInput').value); if (!v) { toast('Адресът на сървъра трябва да започва с https://'); return; }
   const a = $('appInput').value.trim();
@@ -440,9 +445,12 @@ let drawing = false;
 let routeAlternatives = [];
 try { pts = JSON.parse(store.get('boss_route_draft') || '[]').filter(p => Number.isFinite(p.lat)); } catch {}
 try { geom = JSON.parse(store.get('boss_route_geometry') || '[]').filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon)); } catch {}
+// произходът на линията е само в паметта: от черновата тя е с непотвърден произход,
+// а линия от маршрутизатора не се записва в черновата (тя е за конкретния камион)
+let geomOrigin = geom.length > 1 ? 'unconfirmed' : 'none';
 $('rName').value = store.get('boss_route_name') || '';
 $('rNotes').value = store.get('boss_route_notes') || '';
-function saveDraft() { store.set('boss_route_draft', JSON.stringify(pts)); store.set('boss_route_geometry', JSON.stringify(geom)); store.set('boss_route_name', $('rName').value); store.set('boss_route_notes', $('rNotes').value); }
+function saveDraft() { store.set('boss_route_draft', JSON.stringify(pts)); store.set('boss_route_geometry', JSON.stringify(geomOrigin === 'provider' ? [] : geom)); store.set('boss_route_name', $('rName').value); store.set('boss_route_notes', $('rNotes').value); }
 ['rName', 'rNotes'].forEach(id => $(id).oninput = saveDraft);
 function initRouteMap() {
   if (routeMap || !L) return;
@@ -455,6 +463,11 @@ function initRouteMap() {
   });
   drawRoute(true);
 }
+const GEOM_ORIGIN = {
+  manual: 'по ръчно начертаната линия',
+  provider: 'по линията от маршрутизатора за въведения камион (не се пази след презареждане)',
+  unconfirmed: 'по запазена линия с непотвърден произход'
+};
 function drawRoute(fit = false) {
   if (routeLayer) {
     routeLayer.clearLayers();
@@ -469,7 +482,7 @@ function drawRoute(fit = false) {
   }
   $('pts').innerHTML = pts.map((p, i) => `<li><span class="n">${i + 1}</span><input data-i="${i}" value="${esc(p.label)}" placeholder="${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}">
     <button class="b sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button><button class="b sm" data-dn="${i}" ${i < pts.length - 1 ? '' : 'disabled'}>↓</button><button class="b sm warn" data-del="${i}">✕</button></li>`).join('');
-  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · ${geom.length > 1 ? `${geom.length} точки по запазената линия` : 'няма избрана пътна геометрия'} · около ${Math.round(straightKm(geom.length > 1 ? geom : pts))} км по права линия` : 'Сложи поне 2 точки: тръгване и цел.';
+  $('rKm').textContent = pts.length > 1 ? `${pts.length} точки · ${geom.length > 1 ? `${geom.length} точки ${GEOM_ORIGIN[geomOrigin] || GEOM_ORIGIN.unconfirmed}` : 'няма избрана пътна геометрия'} · около ${Math.round(straightKm(geom.length > 1 ? geom : pts))} км по права линия` : 'Сложи поне 2 точки: тръгване и цел.';
 }
 function addPoint(lat, lon, label) {
   if (pts.length >= 25) { toast('Най-много 25 точки'); return; }
@@ -515,7 +528,7 @@ function routeLink(r) { return `${appBase()}index.html#route=${encodeRoute(r)}`;
 $('drawRoute').onclick = () => {
   if (!drawing) {
     if (pts.length < 2) { $('routeErr').textContent = 'Първо добави начало и край.'; return; }
-    geom = [{ lat: pts[0].lat, lon: pts[0].lon }]; drawing = true; routeOptionsCtl.markManualGeometry();
+    geom = [{ lat: pts[0].lat, lon: pts[0].lon }]; drawing = true; geomOrigin = 'manual'; routeOptionsCtl.markManualGeometry();
     $('drawRoute').textContent = 'Готово с чертането';
     $('routeErr').textContent = 'Докосвай картата по желаното трасе, после натисни „Готово“.';
   } else {
@@ -596,8 +609,8 @@ $('routeOptionsList').onclick = e => {
   if (i == null) return;
   const trip = routeAlternatives[+i], shape = valhallaGeometry(trip);
   if (shape.length < 2) { $('routeErr').textContent = 'Маршрутизаторът не върна линия за този вариант.'; return; }
-  geom = shape; drawing = false; routeOptionsCtl.markProviderSelected(); saveDraft(); drawRoute(true);
-  $('routeErr').textContent = 'Избран е вариант ' + (+i + 1) + ' за въведения камион. Линията ще бъде изпратена към шофьора.';
+  geom = shape; drawing = false; geomOrigin = 'provider'; routeOptionsCtl.markProviderSelected(); saveDraft(); drawRoute(true);
+  $('routeErr').textContent = 'Избран е вариант ' + (+i + 1) + ' за въведения камион. Линията ще бъде изпратена към шофьора; в черновата не се пази.';
 };
 
 $('shareRoute').onclick = () => {
@@ -631,7 +644,7 @@ async function loadRoutes() {
     $('sentRoutes').onclick = async e => {
       const id = e.target.dataset.load || e.target.dataset.cancel; if (!id) return;
       const r = out.routes.find(x => x.id == id);
-      if (e.target.dataset.load) { pts = r.waypoints.map(p => ({ ...p })); geom = (r.geometry || []).map(p => ({ lat: p.lat, lon: p.lon })); drawing = false; dropRouteOptions(); $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = r.name; $('rNotes').value = r.notes; saveDraft(); drawRoute(true); window.scrollTo({ top: 0 }); }
+      if (e.target.dataset.load) { pts = r.waypoints.map(p => ({ ...p })); geom = (r.geometry || []).map(p => ({ lat: p.lat, lon: p.lon })); drawing = false; dropRouteOptions(); geomOrigin = geom.length > 1 ? 'unconfirmed' : 'none'; $('drawRoute').textContent = '✏ Начертай собствено трасе'; $('rName').value = r.name; $('rNotes').value = r.notes; saveDraft(); drawRoute(true); window.scrollTo({ top: 0 }); }
       else if (confirm('Да отменя маршрута?')) { await api(`/api/routes/${id}`, { method: 'PATCH', body: { status: 'cancelled' } }); loadRoutes(); }
     };
   } catch (e) { $('sentRoutes').textContent = e.message; }
