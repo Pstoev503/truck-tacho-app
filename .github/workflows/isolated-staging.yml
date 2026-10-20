@@ -1,0 +1,42 @@
+name: Изолирана staging проверка (STAGING-CI-01)
+
+# Само за клона на пакета; не е deploy и няма тайни или права за запис.
+on:
+  push:
+    branches: [claude/staging-ci-01]
+    paths:
+      - scripts/check-isolated-staging.py
+      - scripts/test-check-isolated-staging.py
+      - .github/workflows/isolated-staging.yml
+      - docs/reports/2026-10-20-STAGING-CI-01.md
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harness (този клон)
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Приложението точно на APP_SHA (отделен checkout, само за четене)
+        uses: actions/checkout@v4
+        with:
+          ref: b70c940a5a73a978c7eec8dfed3b03cd7dfb6d8f
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Guard и cleanup тестове със stub docker (без реален Docker)
+        env:
+          APP_DIR: ${{ github.workspace }}/app
+        run: python -I harness/scripts/test-check-isolated-staging.py
+      - name: Реален disposable Docker пуск на приетия runbook (S1–S6 и почистване)
+        run: >-
+          python -I harness/scripts/check-isolated-staging.py
+          --app app --runbook harness/docs/runbooks/isolated-staging-check-v1.md --timeout 600
