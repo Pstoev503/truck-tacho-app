@@ -99,6 +99,8 @@ jobs:
       # Проверява самия образ, не checkout-а: без порт, API, база или тайни.
       - name: Картовият планировчик е в образа (planner.html, ui/ и локалните imports)
         run: docker run --rm -i --network none top10eu-server python - /app/web < scripts/check-packaged-web.py
+      - name: Шефският екран е в образа (boss.html и imports от inline module)
+        run: docker run --rm -i --network none top10eu-server python - /app/web --entry boss.html < scripts/check-packaged-web.py
       - name: HTTP checker-ът пада при невалидна услуга (локални fixtures)
         run: python scripts/test-check-served-web.py
       # Същият образ с реалния app.main:app (lifespan създава таблиците в базата),
@@ -110,6 +112,8 @@ jobs:
           top10eu-server uvicorn app.main:app --host 127.0.0.1 --port 8000
       - name: Планировчикът през HTTP (статус, MIME и локалните imports)
         run: python scripts/check-served-web.py http://127.0.0.1:8000 --ready-timeout 60 --request-timeout 10
+      - name: Шефският екран през HTTP (статус, MIME и imports от inline module)
+        run: python scripts/check-served-web.py http://127.0.0.1:8000 --entry boss.html --ready-timeout 60 --request-timeout 10
       - name: Лог на сървъра при грешка
         if: failure()
         run: docker logs --tail 80 top10eu-http 2>&1 || true

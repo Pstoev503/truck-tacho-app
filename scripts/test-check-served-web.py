@@ -7,15 +7,19 @@ site and runs the checker as a subprocess against it, asserting its exit code
 and output. Timeouts are short (fractions of a second), so no case waits long.
 Standard library only; no network beyond loopback.
 """
+import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-CHECKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check-served-web.py")
+HERE = os.path.dirname(os.path.abspath(__file__))
+CHECKER = os.path.join(HERE, "check-served-web.py")
+FILE_CHECKER = os.path.join(HERE, "check-packaged-web.py")
 
 JS, CSS, HTML, PNG = "text/javascript; charset=utf-8", "text/css; charset=utf-8", "text/html; charset=utf-8", "image/png"
 HEALTH = ("200", "application/json", b'{"ok": true, "server_time": 0}')
@@ -36,6 +40,40 @@ def good_site():
         "/vendor/lib.css": ("200", CSS, b".a { background: url(images/layers.png) }\n"),
         "/vendor/images/layers.png": ("200", PNG, b"\x89PNG\r\n\x1a\n"),
     }
+
+
+BOSS_INLINE = (b'<!doctype html><link rel="manifest" href="manifest.json">'
+               b'<link rel="stylesheet" href="vendor/lib.css">'
+               b'<a href="index.html">back</a><form action="/api/owner/login"></form>'
+               b'<script src="vendor/lib.js"></script>'
+               b'<script type="module">\n'
+               b"import { analyze } from './engine/rules.js';\n"
+               b"import { PROFILE_FIELDS } from './ui/truck-profile-input.mjs';\n"
+               b"const later = () => import('./engine/lazy.js');\n"
+               b"fetch('/api/route-options');\n"
+               b'</script>')
+
+
+def boss_site():
+    """The boss page: its helper is reachable only through an inline module import."""
+    return {
+        "/api/health": HEALTH,
+        "/boss.html": ("200", HTML, BOSS_INLINE),
+        "/manifest.json": ("200", "application/json", b"{}"),
+        "/vendor/lib.css": ("200", CSS, b".a { background: url(images/layers.png) }\n"),
+        "/vendor/images/layers.png": ("200", PNG, b"\x89PNG\r\n\x1a\n"),
+        "/vendor/lib.js": ("200", JS, b"window.L = {};\n"),
+        "/engine/rules.js": ("200", JS, b"export * from './time.js';\nexport const analyze = 1;\n"),
+        "/engine/time.js": ("200", JS, b"export const clock = 1;\n"),
+        "/engine/lazy.js": ("200", JS, b"export const lazy = 1;\n"),
+        "/ui/truck-profile-input.mjs": ("200", JS, b"export const PROFILE_FIELDS = [];\n"),
+    }
+
+
+def both_sites():
+    routes = good_site()
+    routes.update(boss_site())
+    return routes
 
 
 class Site:
@@ -231,6 +269,247 @@ class ServedWebTests(unittest.TestCase):
                      "http://127.0.0.1:8000/app", "ftp://127.0.0.1"):
             code, out, _ = run_checker(base)
             self.assertEqual(code, 2, f"{base}: {out}")
+
+
+class BossEntryTests(unittest.TestCase):
+    """--entry boss.html: inline module imports are part of the checked graph."""
+
+    def serve(self, routes, fallback=None):
+        site = Site(routes, fallback)
+        self.addCleanup(site.close)
+        return site
+
+    def run_boss(self, routes, *entries, fallback=None):
+        site = self.serve(routes, fallback)
+        args = [a for e in (entries or ("boss.html",)) for a in ("--entry", e)]
+        code, out, _ = run_checker(site.base, *args)
+        return site, code, out
+
+    def test_boss_positive_control_follows_inline_and_nested_imports(self):
+        site, code, out = self.run_boss(boss_site())
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS: 9 local files served with expected types from", out)
+        for path in ("/ui/truck-profile-input.mjs", "/engine/rules.js", "/engine/time.js", "/engine/lazy.js",
+                     "/vendor/images/layers.png", "/manifest.json"):
+            self.assertIn(path, site.requests)
+        # links, forms and API calls in the page are not assets
+        for path in ("/index.html", "/api/owner/login", "/api/route-options"):
+            self.assertNotIn(path, site.requests)
+        self.assertNotIn("/planner.html", site.requests)
+
+    def test_planner_and_boss_entries_together_check_the_union(self):
+        site, code, out = self.run_boss(both_sites(), "planner.html", "boss.html")
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS: 15 local files", out)
+        self.assertIn("/planner.html", site.requests)
+        self.assertIn("/ui/truck-profile-input.mjs", site.requests)
+
+    def test_default_entry_is_still_planner_only(self):
+        site = self.serve(both_sites())
+        code, out, _ = run_checker(site.base)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("/boss.html", site.requests)
+
+    def test_missing_inline_helper_fails(self):
+        routes = boss_site()
+        del routes["/ui/truck-profile-input.mjs"]
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("/boss.html: './ui/truck-profile-input.mjs' -> /ui/truck-profile-input.mjs: HTTP 404", out)
+
+    def test_missing_boss_page_fails(self):
+        routes = boss_site()
+        del routes["/boss.html"]
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("required: '/boss.html' -> /boss.html: HTTP 404", out)
+
+    def test_missing_nested_import_of_inline_module_fails(self):
+        routes = boss_site()
+        del routes["/engine/time.js"]
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("/engine/rules.js: './time.js' -> /engine/time.js: HTTP 404", out)
+
+    def test_missing_dynamic_import_of_inline_module_fails(self):
+        routes = boss_site()
+        del routes["/engine/lazy.js"]
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("/boss.html: './engine/lazy.js' -> /engine/lazy.js: HTTP 404", out)
+
+    def test_helper_served_as_text_plain_fails(self):
+        routes = boss_site()
+        routes["/ui/truck-profile-input.mjs"] = ("200", "text/plain; charset=utf-8", b"export const PROFILE_FIELDS = [];\n")
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("/ui/truck-profile-input.mjs: Content-Type text/plain, expected", out)
+
+    def test_helper_html_fallback_fails(self):
+        routes = boss_site()
+        del routes["/ui/truck-profile-input.mjs"]
+        _, code, out = self.run_boss(routes, fallback=("200", HTML, b"<!doctype html><title>app</title>"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("/ui/truck-profile-input.mjs: Content-Type text/html, expected", out)
+
+    def test_helper_redirect_is_not_followed(self):
+        other = self.serve({"/ui/truck-profile-input.mjs": ("200", JS, b"export {};")})
+        routes = boss_site()
+        routes["/ui/truck-profile-input.mjs"] = ("302", "text/plain", f"{other.base}/ui/truck-profile-input.mjs".encode())
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("/ui/truck-profile-input.mjs: HTTP 302", out)
+        self.assertEqual(other.requests, [])
+
+    def test_hanging_helper_times_out(self):
+        routes = boss_site()
+        routes["/ui/truck-profile-input.mjs"] = "hang"
+        site = self.serve(routes)
+        code, out, elapsed = run_checker(site.base, "--entry", "boss.html")
+        self.assertEqual(code, 1, out)
+        self.assertIn("/ui/truck-profile-input.mjs: request failed", out)
+        self.assertLess(elapsed, 10)
+
+    def test_inline_bare_and_traversal_imports_fail_without_request(self):
+        routes = boss_site()
+        routes["/boss.html"] = ("200", HTML, BOSS_INLINE.replace(
+            b"</script>", b"import L from 'leaflet';\nimport '../../etc/passwd.js';\n</script>"))
+        site, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("/boss.html: bare module specifier 'leaflet'", out)
+        self.assertIn("/boss.html: '../../etc/passwd.js' climbs above the web root", out)
+        self.assertFalse(any("passwd" in p or "leaflet" in p for p in site.requests))
+
+    def test_inline_external_imports_are_skipped_and_never_requested(self):
+        other = self.serve({"/x.js": ("200", JS, b"export {};")})
+        routes = boss_site()
+        routes["/boss.html"] = ("200", HTML, BOSS_INLINE.replace(
+            b"</script>", f"import '{other.base}/x.js';\nimport 'https://cdn.example.org/y.js';\n</script>".encode()))
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(other.requests, [])
+
+    def test_ordinary_script_and_page_text_are_not_imports(self):
+        routes = boss_site()
+        routes["/boss.html"] = ("200", HTML, BOSS_INLINE
+            + b"<script>\nimport x from './nope-classic.js';\n</script>"
+            + b'<script type="text/javascript">import "./nope-typed.js";</script>'
+            + b"<pre>\nimport y from './nope-text.js';\n</pre>"
+            + b'<script type="module" src="ui/truck-profile-input.mjs">import "./nope-src.js";</script>')
+        site, code, out = self.run_boss(routes)
+        self.assertEqual(code, 0, out)
+        self.assertFalse(any("nope" in p for p in site.requests), site.requests)
+
+    def test_helper_reached_only_if_imported(self):
+        routes = boss_site()
+        routes["/boss.html"] = ("200", HTML, BOSS_INLINE.replace(
+            b"import { PROFILE_FIELDS } from './ui/truck-profile-input.mjs';\n", b""))
+        _, code, out = self.run_boss(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("required: '/ui/truck-profile-input.mjs' is not reached from /boss.html", out)
+
+    def test_entry_values_are_restricted(self):
+        site = self.serve(boss_site())
+        for entry in ("../boss.html", "/etc/passwd", "http://127.0.0.1/boss.html", "index.html", "BOSS.HTML", ""):
+            code, out, _ = run_checker(site.base, "--entry", entry)
+            self.assertEqual(code, 2, f"{entry!r}: {out}")
+        self.assertEqual(site.requests, [])
+
+
+def load_file_checker():
+    spec = importlib.util.spec_from_file_location("check_packaged_web", FILE_CHECKER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FileCheckerTests(unittest.TestCase):
+    """check-packaged-web.py on a temporary synthetic web root (no image, no network)."""
+
+    def make_root(self, routes):
+        root = tempfile.mkdtemp(prefix="webroot-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        for path, entry in routes.items():
+            if path.startswith("/api/"):
+                continue
+            target = os.path.join(root, path.lstrip("/"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as f:
+                f.write(entry[2])
+        return root
+
+    def run_file(self, root, *entries):
+        args = [a for e in entries for a in ("--entry", e)]
+        proc = subprocess.run([sys.executable, "-I", "-", root, *args], stdin=open(FILE_CHECKER, "rb"),
+                              capture_output=True, text=True, timeout=30)
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def test_planner_and_boss_positive_controls_through_stdin(self):
+        root = self.make_root(both_sites())
+        code, out = self.run_file(root)
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS: 8 local files reachable from planner.html", out)
+        code, out = self.run_file(root, "boss.html")
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS: 9 local files reachable from boss.html", out)
+        self.assertIn("ok  ui/truck-profile-input.mjs", out)
+        self.assertIn("ok  engine/lazy.js", out)
+        code, out = self.run_file(root, "planner.html", "boss.html")
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS: 15 local files reachable from planner.html + boss.html", out)
+
+    def test_missing_helper_nested_or_page_fails(self):
+        for missing, needle in (("/ui/truck-profile-input.mjs", "boss.html: './ui/truck-profile-input.mjs' -> ui/truck-profile-input.mjs is missing"),
+                                ("/engine/time.js", "engine/rules.js: './time.js' -> engine/time.js is missing"),
+                                ("/boss.html", "required: 'boss.html' -> boss.html is missing")):
+            routes = boss_site()
+            del routes[missing]
+            code, out = self.run_file(self.make_root(routes), "boss.html")
+            self.assertEqual(code, 1, f"{missing}: {out}")
+            self.assertIn(needle, out)
+            if missing != "/boss.html":
+                # reported once, at the place that needs the file
+                self.assertIn("FAIL: 1 problem(s)", out)
+
+    def test_helper_present_but_not_imported_fails(self):
+        routes = boss_site()
+        routes["/boss.html"] = ("200", HTML, BOSS_INLINE.replace(
+            b"import { PROFILE_FIELDS } from './ui/truck-profile-input.mjs';\n", b""))
+        code, out = self.run_file(self.make_root(routes), "boss.html")
+        self.assertEqual(code, 1, out)
+        self.assertIn("required: 'ui/truck-profile-input.mjs' exists but is not reached from boss.html", out)
+        self.assertNotIn("ok  ui/truck-profile-input.mjs", out)
+
+    def test_inline_bare_import_and_symlink_escape_fail(self):
+        routes = boss_site()
+        routes["/boss.html"] = ("200", HTML, BOSS_INLINE.replace(b"</script>", b"import L from 'leaflet';\n</script>"))
+        root = self.make_root(routes)
+        outside = tempfile.mkdtemp(prefix="outside-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(outside, ignore_errors=True))
+        with open(os.path.join(outside, "time.js"), "w") as f:
+            f.write("export const clock = 1;\n")
+        os.remove(os.path.join(root, "engine", "time.js"))
+        os.symlink(os.path.join(outside, "time.js"), os.path.join(root, "engine", "time.js"))
+        code, out = self.run_file(root, "boss.html")
+        self.assertEqual(code, 1, out)
+        self.assertIn("boss.html: bare module specifier 'leaflet'", out)
+        self.assertIn("engine/rules.js: './time.js' resolves outside WEB_ROOT", out)
+
+    def test_inline_parser_reads_only_module_scripts(self):
+        fc = load_file_checker()
+        html = (BOSS_INLINE + b"<script>import a from './classic.js';</script>"
+                b"<p>import b from './text.js';</p><script type=' MODULE '>export * from './upper.js';</script>").decode()
+        refs = fc.references_with_kind("boss.html", html)
+        modules = [r for r, is_module in refs if is_module]
+        self.assertEqual(modules, ["./engine/rules.js", "./ui/truck-profile-input.mjs", "./engine/lazy.js", "./upper.js"])
+        self.assertEqual([r for r, is_module in refs if not is_module], ["manifest.json", "vendor/lib.css", "vendor/lib.js"])
+        self.assertEqual(fc.references("planner.html", '<script type="module" src="ui/a.mjs"></script>'), ["ui/a.mjs"])
+
+    def test_entry_values_are_restricted(self):
+        root = self.make_root(boss_site())
+        for entry in ("../boss.html", "/etc/passwd", "index.html", "boss"):
+            code, out = self.run_file(root, entry)
+            self.assertEqual(code, 2, f"{entry!r}: {out}")
 
 
 if __name__ == "__main__":

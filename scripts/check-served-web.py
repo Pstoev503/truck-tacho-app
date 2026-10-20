@@ -1,11 +1,15 @@
 """Checks over HTTP that a running server serves the map planner with correct types.
 
-Usage: python check-served-web.py BASE_URL [--ready-timeout S] [--request-timeout S]
-       e.g. python check-served-web.py http://127.0.0.1:8000
+Usage: python check-served-web.py BASE_URL [--entry planner.html|boss.html ...]
+                                   [--ready-timeout S] [--request-timeout S]
+       e.g. python check-served-web.py http://127.0.0.1:8000 --entry boss.html
 
 Waits (bounded) for GET /api/health to answer 200 with JSON {"ok": true}, then
-starts at /planner.html and follows every local reference the same way the file
-checker does (scripts/check-packaged-web.py is loaded read-only for that). Each
+starts at each entry page (default /planner.html; --entry may repeat) and follows
+every local reference the same way the file checker does, including the imports
+of inline <script type="module"> blocks (scripts/check-packaged-web.py is loaded
+read-only for that). Each entry's required files must be reached through those
+references. Each
 reference must answer 200 with a non-empty body and a fitting Content-Type:
 HTML for .html, a JavaScript MIME type for .js/.mjs, text/css for .css, and
 anything but HTML for other assets (an HTML answer there is an SPA fallback).
@@ -33,6 +37,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 REQUIRED = ["/planner.html", "/ui/map-planner.mjs", "/ui/map-planner.css"]
 ENTRY = "/planner.html"
+DEFAULT_ENTRY = "planner.html"
 HEALTH = "/api/health"
 
 JS_TYPES = {"text/javascript", "application/javascript", "application/x-javascript",
@@ -127,17 +132,23 @@ def resolve(from_path, ref):
     return posixpath.normpath(joined), None
 
 
-def check(origin, request_timeout, file_checker):
-    problems, seen, queue = [], set(), []
+def check(origin, request_timeout, file_checker, entries=(DEFAULT_ENTRY,)):
+    problems, seen, reached, queue = [], set(), set(), []
 
     def visit(path, source, ref):
         if path not in seen:
             seen.add(path)
             queue.append((path, source, ref))
 
-    for req in REQUIRED:
-        visit(req, "required", req)
-    visit(ENTRY, "entry", ENTRY)
+    required = []
+    for entry in entries:
+        for req in file_checker.ENTRY_GRAPHS[entry]:
+            if "/" + req not in required:
+                required.append("/" + req)
+    # entry pages start the walk; every other required file must be found through it
+    for entry in entries:
+        reached.add("/" + entry)
+        visit("/" + entry, "required", "/" + entry)
 
     while queue:
         path, source, ref = queue.pop(0)
@@ -166,17 +177,22 @@ def check(origin, request_timeout, file_checker):
         if ext not in CONTENT_EXTS:
             continue
         text = body.decode("utf-8", errors="replace")
-        for child in file_checker.references(path, text):
+        for child, is_module in file_checker.references_with_kind(path, text):
             if file_checker.is_external(child):
                 continue
-            if ext in (".js", ".mjs") and not child.startswith(("./", "../", "/")):
+            if is_module and file_checker.is_bare(child):
                 problems.append(f"{path}: bare module specifier '{child}' cannot load without a bundler")
                 continue
             target, reason = resolve(path, child)
             if target is None:
                 problems.append(f"{path}: '{child}' {reason}")
                 continue
+            reached.add(target)
             visit(target, path, child)
+
+    for req in required:
+        if req not in reached:
+            problems.append(f"required: '{req}' is not reached from {' or '.join('/' + e for e in entries)}")
 
     return sorted(seen), problems
 
@@ -184,6 +200,8 @@ def check(origin, request_timeout, file_checker):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("base_url")
+    ap.add_argument("--entry", action="append", choices=["boss.html", "planner.html"],
+                    help="entry page to check (repeatable; default planner.html)")
     ap.add_argument("--ready-timeout", type=float, default=60.0)
     ap.add_argument("--request-timeout", type=float, default=10.0)
     args = ap.parse_args(argv)
@@ -199,7 +217,12 @@ def main(argv=None):
         print(f"FAIL: {not_ready}")
         return 1
     print(f"ready: {origin}{HEALTH}")
-    files, problems = check(origin, args.request_timeout, load_file_checker())
+    entries = list(dict.fromkeys(args.entry or [DEFAULT_ENTRY]))
+    file_checker = load_file_checker()
+    if set(entries) - set(file_checker.ENTRY_GRAPHS):
+        print("FAIL: unknown entry")
+        return 2
+    files, problems = check(origin, args.request_timeout, file_checker, entries)
     for p in problems:
         print(f"FAIL {p}")
     if problems:
@@ -207,7 +230,8 @@ def main(argv=None):
         return 1
     for f in files:
         print(f"ok  {f}")
-    print(f"PASS: {len(files)} local files served with expected types from {origin}{ENTRY}")
+    print(f"PASS: {len(files)} local files served with expected types from "
+          f"{' + '.join(origin + '/' + e for e in entries)}")
     return 0
 
 
