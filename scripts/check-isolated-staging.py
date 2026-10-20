@@ -23,6 +23,7 @@ Standard library only. Prints no tokens, passwords or environment.
 """
 import argparse
 import hashlib
+import io
 import os
 import re
 import signal
@@ -201,6 +202,16 @@ def run(app, runbook, timeout, out=sys.stdout, expected_app=APP_SHA, expected_bl
     return ok, summary
 
 
+def annotate(title, message):
+    """In GitHub Actions, also report as a notice annotation (readable through the API); never secrets."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        text = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::notice title={title}::{text}")
+
+
+EVIDENCE = re.compile(r"^(PASS: \d+ local files reachable from \S+.*|owner ok|S[1-6] ok.*)$")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--app", required=True, help="clean checkout of APP_SHA")
@@ -208,14 +219,35 @@ def main(argv=None):
     ap.add_argument("--timeout", type=float, default=600.0)
     args = ap.parse_args(argv)
     print(f"APP_SHA {APP_SHA}\nRUNBOOK_SHA {RUNBOOK_SHA} blob {RUNBOOK_BLOB}")
-    print(f"harness {os.environ.get('GITHUB_SHA', '(local)')} run {os.environ.get('GITHUB_RUN_ID', '-')}")
+    harness = os.environ.get("GITHUB_SHA", "(local)")
+    print(f"harness {harness} run {os.environ.get('GITHUB_RUN_ID', '-')}")
+    server = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
+                            capture_output=True, text=True, timeout=60)
+    docker_server = server.stdout.strip() if server.returncode == 0 else "unavailable"
+    annotate("inputs", f"APP_SHA {APP_SHA}; RUNBOOK_SHA {RUNBOOK_SHA} blob {RUNBOOK_BLOB}; "
+                       f"harness {harness}; docker server {docker_server}")
+    log = io.StringIO()
+
+    class Tee:
+        def write(self, text):
+            sys.stdout.write(text)
+            log.write(text)
+
+        def flush(self):
+            sys.stdout.flush()
+    started = time.monotonic()
     try:
-        ok, summary = run(os.path.realpath(args.app), args.runbook, args.timeout)
+        ok, summary = run(os.path.realpath(args.app), args.runbook, args.timeout, out=Tee())
     except GuardError as exc:
         print(f"GUARD FAIL: {exc} — nothing was executed")
+        annotate("guard", f"FAIL: {exc} — nothing was executed")
         return 2
+    elapsed = time.monotonic() - started
+    evidence = [line for line in log.getvalue().splitlines() if EVIDENCE.match(line)]
+    annotate("runbook output", "\n".join(evidence) or "no expected lines")
     for line in summary:
         print(("PASS " if ok else "INFO ") + line)
+    annotate("cleanup and result", "\n".join(summary + [f"elapsed {elapsed:.0f}s", "RESULT: " + ("PASS" if ok else "FAIL")]))
     print("RESULT: " + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
 
