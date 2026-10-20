@@ -32,6 +32,15 @@ DAY = 24 * H
 NOW = int(time.time() * 1000)
 T0 = NOW - 2 * DAY  # записите в тестовете са от преди 2 дни
 TEST_REGISTRATION_CODE = "synthetic-test-registration-code"
+TRUCK_PROFILE = {
+    "heightM": 4.0,
+    "widthM": 2.5,
+    "lengthM": 16.5,
+    "grossWeightT": 40.0,
+    "axleLoadT": 10.0,
+    "axleCount": 5,
+    "hazmat": False,
+}
 
 
 @pytest.fixture()
@@ -82,10 +91,15 @@ def join_aggregate_key(ip="testclient"):
 
 
 def route_options(c, token):
-    return c.post("/api/route-options", json={
+    return c.post("/api/route-options", json=route_options_body(), headers=auth(token))
+
+
+def route_options_body():
+    return {
         "origin": {"lat": 42.7, "lon": 23.3},
         "destination": {"lat": 43.2, "lon": 27.9},
-    }, headers=auth(token))
+        "truckProfile": TRUCK_PROFILE.copy(),
+    }
 
 
 class RouterResponse:
@@ -680,6 +694,7 @@ def test_route_options_rejects_missing_or_invalid_router_without_egress(
     response = client.post("/api/route-options", json={
         "origin": {"lat": 42.7, "lon": 23.3},
         "destination": {"lat": 43.2, "lon": 27.9},
+        "truckProfile": TRUCK_PROFILE,
     }, headers=auth(token))
 
     assert response.status_code == 503
@@ -716,6 +731,7 @@ def test_route_options_uses_explicit_router_and_bounded_payload(
     response = client.post("/api/route-options", json={
         "origin": {"lat": 42.7, "lon": 23.3},
         "destination": {"lat": 43.2, "lon": 27.9},
+        "truckProfile": TRUCK_PROFILE,
     }, headers=auth(token))
 
     assert response.status_code == 200
@@ -727,9 +743,91 @@ def test_route_options_uses_explicit_router_and_bounded_payload(
     assert json.loads(request.data) == {
         "locations": [{"lat": 42.7, "lon": 23.3}, {"lat": 43.2, "lon": 27.9}],
         "costing": "truck",
+        "costing_options": {
+            "truck": {
+                "height": 4.0,
+                "width": 2.5,
+                "length": 16.5,
+                "weight": 40.0,
+                "axle_load": 10.0,
+                "axle_count": 5,
+                "hazmat": False,
+            },
+        },
         "units": "kilometers",
         "alternates": 2,
     }
+
+
+def test_route_options_maps_distinct_profiles_without_mutating_input(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    payloads = []
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 25
+        payloads.append(json.loads(request.data))
+        return RouterResponse()
+
+    monkeypatch.setattr(main, "urlopen", fake_urlopen)
+    profiles = [
+        TRUCK_PROFILE.copy(),
+        {
+            "heightM": 3,
+            "widthM": 2,
+            "lengthM": 12,
+            "grossWeightT": 18,
+            "axleLoadT": 6,
+            "axleCount": 3,
+            "hazmat": True,
+        },
+    ]
+    original_profiles = [profile.copy() for profile in profiles]
+
+    for profile in profiles:
+        body = route_options_body()
+        body["truckProfile"] = profile
+        response = client.post("/api/route-options", json=body, headers=auth(token))
+        assert response.status_code == 200
+
+    assert profiles == original_profiles
+    assert payloads == [
+        {
+            "locations": [{"lat": 42.7, "lon": 23.3}, {"lat": 43.2, "lon": 27.9}],
+            "costing": "truck",
+            "costing_options": {
+                "truck": {
+                    "height": 4.0,
+                    "width": 2.5,
+                    "length": 16.5,
+                    "weight": 40.0,
+                    "axle_load": 10.0,
+                    "axle_count": 5,
+                    "hazmat": False,
+                },
+            },
+            "units": "kilometers",
+            "alternates": 2,
+        },
+        {
+            "locations": [{"lat": 42.7, "lon": 23.3}, {"lat": 43.2, "lon": 27.9}],
+            "costing": "truck",
+            "costing_options": {
+                "truck": {
+                    "height": 3,
+                    "width": 2,
+                    "length": 12,
+                    "weight": 18,
+                    "axle_load": 6,
+                    "axle_count": 3,
+                    "hazmat": True,
+                },
+            },
+            "units": "kilometers",
+            "alternates": 2,
+        },
+    ]
+    assert payloads[0] != payloads[1]
 
 
 @pytest.mark.parametrize(("failure", "status"), [
@@ -762,6 +860,7 @@ def test_route_options_upstream_failures_do_not_fallback(
     response = client.post("/api/route-options", json={
         "origin": {"lat": 42.7, "lon": 23.3},
         "destination": {"lat": 43.2, "lon": 27.9},
+        "truckProfile": TRUCK_PROFILE,
     }, headers=auth(token))
 
     assert response.status_code == status
@@ -773,10 +872,7 @@ def test_route_options_remains_owner_only(client, monkeypatch):
     calls = []
     monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    body = {
-        "origin": {"lat": 42.7, "lon": 23.3},
-        "destination": {"lat": 43.2, "lon": 27.9},
-    }
+    body = route_options_body()
     anonymous = client.post("/api/route-options", json=body)
     boss = register(client)
     driver = join(client, add_driver(client, boss)["invite"]["code"])
@@ -784,6 +880,91 @@ def test_route_options_remains_owner_only(client, monkeypatch):
 
     assert anonymous.status_code == 401
     assert driver_response.status_code == 403
+    assert not calls
+    assert not main.route_options_throttle.hits
+
+
+def test_route_options_missing_profile_rejects_before_egress_or_budget(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: calls.append((args, kwargs)))
+    body = route_options_body()
+    del body["truckProfile"]
+
+    response = client.post("/api/route-options", json=body, headers=auth(token))
+
+    assert response.status_code == 422
+    assert not calls
+    assert not main.route_options_throttle.hits
+
+
+@pytest.mark.parametrize("option", ["ignore_access", "ignore_restrictions"])
+def test_route_options_rejects_access_bypass_options_before_egress_or_budget(
+        client, monkeypatch, option):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: calls.append((args, kwargs)))
+    body = route_options_body()
+    body["truckProfile"][option] = True
+
+    response = client.post("/api/route-options", json=body, headers=auth(token))
+
+    assert response.status_code == 422
+    assert not calls
+    assert not main.route_options_throttle.hits
+
+
+@pytest.mark.parametrize("missing_field", [
+    "heightM", "widthM", "lengthM", "grossWeightT", "axleLoadT", "axleCount", "hazmat",
+])
+def test_route_options_rejects_incomplete_profile_before_egress_or_budget(
+        client, monkeypatch, missing_field):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: calls.append((args, kwargs)))
+    body = route_options_body()
+    del body["truckProfile"][missing_field]
+
+    response = client.post("/api/route-options", json=body, headers=auth(token))
+
+    assert response.status_code == 422
+    assert not calls
+    assert not main.route_options_throttle.hits
+
+
+@pytest.mark.parametrize("profile", [
+    None,
+    "truck",
+    [],
+    TRUCK_PROFILE | {"unexpected": True},
+    TRUCK_PROFILE | {"heightM": 0},
+    TRUCK_PROFILE | {"heightM": -1},
+    TRUCK_PROFILE | {"widthM": 0},
+    TRUCK_PROFILE | {"lengthM": 0},
+    TRUCK_PROFILE | {"grossWeightT": 0},
+    TRUCK_PROFILE | {"axleLoadT": 0},
+    TRUCK_PROFILE | {"axleLoadT": 41},
+    TRUCK_PROFILE | {"axleCount": 0},
+    TRUCK_PROFILE | {"axleCount": 5.0},
+    TRUCK_PROFILE | {"axleCount": True},
+    TRUCK_PROFILE | {"hazmat": "false"},
+    TRUCK_PROFILE | {"heightM": "4.0"},
+])
+def test_route_options_rejects_invalid_profile_before_egress_or_budget(
+        client, monkeypatch, profile):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    calls = []
+    monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: calls.append((args, kwargs)))
+    body = route_options_body()
+    body["truckProfile"] = profile
+
+    response = client.post("/api/route-options", json=body, headers=auth(token))
+
+    assert response.status_code == 422
     assert not calls
     assert not main.route_options_throttle.hits
 
