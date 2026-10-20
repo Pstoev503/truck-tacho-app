@@ -222,6 +222,14 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
 # ─────────────────────────── шофьори ───────────────────────────
 
 def make_invite(db: Session, drv: User) -> dict:
+    drv = db.scalar(
+        select(User)
+        .where(User.id == drv.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not drv or not drv.active:
+        raise HTTPException(409, "Шофьорът е спрян")
     t = now_ms()
     # старите неизползвани кодове спират да важат
     db.execute(update(Invite).where(Invite.user_id == drv.id, Invite.used_at.is_(None)).values(expires_at=t))
@@ -270,8 +278,6 @@ def add_driver(body: DriverIn, boss: User = Depends(owner), db: Session = Depend
 @app.post("/api/drivers/{driver_id}/invite")
 def reinvite(driver_id: int, boss: User = Depends(owner), db: Session = Depends(get_db)):
     d = own_driver(db, boss, driver_id)
-    if not d.active:
-        raise HTTPException(409, "Шофьорът е спрян")
     invite = make_invite(db, d)
     db.commit()
     return {"invite": invite}
@@ -350,14 +356,34 @@ def join(body: JoinIn, request: Request, db: Session = Depends(get_db)):
             raise HTTPException(429, "Твърде много опити — изчакай 15 минути")
         join_throttle.fail(key)
         join_aggregate_throttle.fail(aggregate_key)
-    t = now_ms()
     inv = db.scalar(select(Invite).where(Invite.code_hash == fingerprint(normalized_code)))
-    if not inv or inv.used_at is not None or inv.expires_at < t:
+    if not inv:
         raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
-    d = db.get(User, inv.user_id)
+    d = db.scalar(
+        select(User)
+        .where(User.id == inv.user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if not d or not d.active:
         raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
-    inv.used_at = t
+    inv = db.scalar(
+        select(Invite)
+        .where(Invite.id == inv.id, Invite.code_hash == fingerprint(normalized_code))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    t = now_ms()
+    if not inv or inv.used_at is not None or inv.expires_at < t:
+        raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
+    claimed_user_id = db.scalar(
+        update(Invite)
+        .where(Invite.id == inv.id, Invite.used_at.is_(None), Invite.expires_at >= t)
+        .values(used_at=t)
+        .returning(Invite.user_id)
+    )
+    if claimed_user_id is None:
+        raise HTTPException(404, "Кодът е грешен или изтекъл — поискай нов от шефа")
     # един телефон на шофьор: старите входове спират
     db.execute(update(AuthToken).where(AuthToken.user_id == d.id).values(revoked=True))
     token = issue_token(db, d, body.device or "телефон")
