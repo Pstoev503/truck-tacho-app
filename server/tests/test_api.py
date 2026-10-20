@@ -720,7 +720,7 @@ def test_route_options_uses_explicit_router_and_bounded_payload(
             return False
 
         def read(self, limit):
-            assert limit == 5 * 1024 * 1024
+            assert limit == main.MAX_BODY + 1
             return b'{"trip":{"status":0}}'
 
     def fake_urlopen(request, timeout):
@@ -757,6 +757,136 @@ def test_route_options_uses_explicit_router_and_bounded_payload(
         "units": "kilometers",
         "alternates": 2,
     }
+
+
+@pytest.mark.parametrize(("response_size", "status"), [
+    (main.MAX_BODY - 1, 200),
+    (main.MAX_BODY, 200),
+    (main.MAX_BODY + 1, 502),
+])
+def test_route_options_bounds_upstream_response_size(
+        client, monkeypatch, response_size, status):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    response_body = b'{"trip":{"status":0}}' + b" " * (
+        response_size - len(b'{"trip":{"status":0}}'))
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            assert limit == main.MAX_BODY + 1
+            return response_body[:limit]
+
+    monkeypatch.setattr(main, "urlopen", lambda *_args, **_kwargs: Response())
+
+    response = route_options(client, token)
+
+    assert response.status_code == status
+    if status == 200:
+        assert response.json() == {"trip": {"status": 0}}
+    else:
+        assert response.json() == {"detail": "Маршрутизаторът не върна валиден маршрут"}
+
+
+INVALID_ROUTE_JSON = [
+    pytest.param(b'{"trip":{"status":NaN}}', id="nan"),
+    pytest.param(b'{"trip":{"status":Infinity}}', id="infinity"),
+    pytest.param(b'{"trip":{"status":-Infinity}}', id="negative-infinity"),
+    pytest.param(b'{"trip":{"status":1e400}}', id="positive-overflow"),
+    pytest.param(b'{"trip":{"status":-1e400}}', id="negative-overflow"),
+    pytest.param(b'{"trip":{"status":1.0e+9999}}', id="large-exponent"),
+    pytest.param(b'{"trip":{"status":-9E9999}}', id="negative-large-exponent"),
+    pytest.param(b'{"trip":undefined}', id="non-json-literal"),
+    pytest.param(b'{"trip":{"status":0,}}', id="trailing-comma"),
+    pytest.param(b"", id="empty"),
+    pytest.param(b"\xff", id="invalid-utf8"),
+    pytest.param(b'{"trip":{"status":' + b"9" * 5000 + b'}}', id="oversized-integer"),
+    pytest.param(
+        b'{"trip":{"nested":' + b"[" * 1100 + b"0" + b"]" * 1100 + b'}}',
+        id="excessive-depth",
+    ),
+]
+
+
+@pytest.mark.parametrize("response_body", INVALID_ROUTE_JSON)
+def test_route_options_rejects_invalid_upstream_json_generically(
+        client, monkeypatch, response_body):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            assert limit == main.MAX_BODY + 1
+            return response_body
+
+    monkeypatch.setattr(main, "urlopen", lambda *_args, **_kwargs: Response())
+
+    response = route_options(client, token)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Маршрутизаторът временно не отговаря"}
+    decoded_body = response_body.decode("utf-8", errors="ignore")
+    assert not decoded_body or decoded_body not in response.text
+
+
+def test_route_options_maps_json_recursion_error_to_generic_503(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+    original_loads = json.loads
+
+    def fail_route_response(data, *args, **kwargs):
+        if data == b'{"trip":{"status":0}}':
+            raise RecursionError("synthetic parser recursion")
+        return original_loads(data, *args, **kwargs)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b'{"trip":{"status":0}}'
+
+    monkeypatch.setattr(main.json, "loads", fail_route_response)
+    monkeypatch.setattr(main, "urlopen", lambda *_args, **_kwargs: Response())
+
+    response = route_options(client, token)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Маршрутизаторът временно не отговаря"}
+
+
+def test_route_options_invalid_json_failures_consume_owner_budget(client, monkeypatch):
+    token = register(client)
+    monkeypatch.setenv("VALHALLA_URL", "https://synthetic-router.example")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b'{"trip":{"status":NaN}}'
+
+    monkeypatch.setattr(main, "urlopen", lambda *_args, **_kwargs: Response())
+
+    assert all(route_options(client, token).status_code == 503 for _ in range(10))
+    assert route_options(client, token).status_code == 429
 
 
 def test_route_options_maps_distinct_profiles_without_mutating_input(client, monkeypatch):
