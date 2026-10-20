@@ -41,6 +41,7 @@ TOKEN_MAX_AGE_MS = TOKEN_MAX_AGE_DAYS * DAY_MS
 MAX_ACTIVITIES_PER_SYNC = 20000
 MAX_TS = 4_102_444_800_000  # 2100 г.
 MAX_BODY = 5 * 1024 * 1024
+MAX_ROUTE_RESPONSE_DEPTH = 100
 HISTORY_LIMIT_MS = 45 * DAY_MS  # телефонът пази 35 дни; по-старото на сървъра не се пипа
 TYPES = ("drive", "work", "avail", "rest")
 
@@ -583,6 +584,36 @@ def configured_valhalla_base() -> str | None:
     return configured.rstrip("/")
 
 
+def finite_json_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite JSON number")
+    return number
+
+
+def reject_json_constant(_value: str):
+    raise ValueError("non-standard JSON constant")
+
+
+def validate_route_response_depth(value):
+    stack = [(iter((value,)), 0)]
+    while stack:
+        try:
+            current = next(stack[-1][0])
+        except StopIteration:
+            stack.pop()
+            continue
+        depth = stack[-1][1]
+        if isinstance(current, dict):
+            if depth >= MAX_ROUTE_RESPONSE_DEPTH:
+                raise ValueError("JSON nesting too deep")
+            stack.append((iter(current.values()), depth + 1))
+        elif isinstance(current, list):
+            if depth >= MAX_ROUTE_RESPONSE_DEPTH:
+                raise ValueError("JSON nesting too deep")
+            stack.append((iter(current), depth + 1))
+
+
 @app.post("/api/route-options")
 def route_options(body: RouteOptionsIn, _boss: User = Depends(owner)):
     base = configured_valhalla_base()
@@ -609,8 +640,16 @@ def route_options(body: RouteOptionsIn, _boss: User = Depends(owner)):
         route_options_throttle.fail(key)
     try:
         with urlopen(req, timeout=25) as response:
-            result = json.loads(response.read(5 * 1024 * 1024))
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            response_body = response.read(MAX_BODY + 1)
+        if len(response_body) > MAX_BODY:
+            raise HTTPException(502, "Маршрутизаторът не върна валиден маршрут")
+        result = json.loads(
+            response_body,
+            parse_float=finite_json_float,
+            parse_constant=reject_json_constant,
+        )
+        validate_route_response_depth(result)
+    except (HTTPError, URLError, TimeoutError, ValueError, RecursionError) as exc:
         raise HTTPException(503, "Маршрутизаторът временно не отговаря") from exc
     if not isinstance(result, dict) or not isinstance(result.get("trip"), dict):
         raise HTTPException(502, "Маршрутизаторът не върна валиден маршрут")
