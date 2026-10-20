@@ -73,7 +73,24 @@ class Stub:
         with open(path, "w") as f:
             f.write(STUB)
         os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
-        self.env = {"PATH": bindir + os.pathsep + os.environ["PATH"], "STUB_LOG": self.log, "STUB_STATE": self.state}
+        self.bash_log = os.path.join(self.dir, "bash-calls.jsonl")
+        bash = os.path.join(bindir, "bash")     # counts bash calls; only installed for CLI guard tests
+        self.bash_stub = bash
+        with open(bash + ".stub", "w") as f:
+            f.write("#!/usr/bin/env python3\nimport json, os, sys\n"
+                    "open(os.environ['STUB_BASH_LOG'], 'a').write(json.dumps(sys.argv[1:2]) + '\\n')\n")
+        self.env = {"PATH": bindir + os.pathsep + os.environ["PATH"], "STUB_LOG": self.log, "STUB_STATE": self.state,
+                    "STUB_BASH_LOG": self.bash_log}
+
+    def install_bash_stub(self):
+        os.rename(self.bash_stub + ".stub", self.bash_stub)
+        os.chmod(self.bash_stub, os.stat(self.bash_stub).st_mode | stat.S_IEXEC)
+
+    def bash_calls(self):
+        if not os.path.exists(self.bash_log):
+            return []
+        with open(self.bash_log) as f:
+            return [json.loads(line) for line in f]
 
     def calls(self):
         if not os.path.exists(self.log):
@@ -159,6 +176,63 @@ class GuardTests(unittest.TestCase):
         require_app()
         path, blob = write_runbook(self, runbook_text() + "\n<!-- run:stray -->\nno code here\n")
         self.assertGuard(Stub(self), "without a bash block: stray", app=APP_DIR, runbook=path, expected_blob=blob)
+
+
+class CliGuardTests(unittest.TestCase):
+    """The command line runs every input guard before the first docker or bash call (incl. `docker version`)."""
+
+    def run_cli(self, app, runbook, env):
+        proc = subprocess.run([sys.executable, "-I", RUNNER, "--app", app, "--runbook", runbook, "--timeout", "30"],
+                              env=env, capture_output=True, text=True, timeout=120)
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def assertCliGuard(self, app, runbook, needle):
+        stub = Stub(self)
+        stub.install_bash_stub()
+        code, out = self.run_cli(app, runbook, dict(os.environ, **stub.env))
+        self.assertEqual(code, 2, out)
+        self.assertIn("GUARD FAIL", out)
+        self.assertIn(needle, out)
+        self.assertNotIn("Traceback", out)
+        self.assertEqual(stub.calls(), [], "no docker call, not even `docker version`")
+        self.assertEqual(stub.bash_calls(), [], "no bash call")
+
+    def test_cli_wrong_app_sha(self):
+        repo, _ = make_repo(self)
+        self.assertCliGuard(repo, RUNBOOK, "expected " + st.APP_SHA)
+
+    def test_cli_dirty_app_checkout(self):
+        require_app()
+        copy = os.path.join(tempfile.mkdtemp(prefix="t10-dirty-"), "app")
+        self.addCleanup(shutil.rmtree, os.path.dirname(copy), True)
+        shutil.copytree(APP_DIR, copy, symlinks=True)
+        with open(os.path.join(copy, "untracked-local-change.txt"), "w") as f:
+            f.write("x")
+        self.assertCliGuard(copy, RUNBOOK, "local changes")
+
+    def test_cli_wrong_runbook_blob(self):
+        require_app()
+        path, _ = write_runbook(self, runbook_text().replace("S6 ok", "S6 OK"))
+        self.assertCliGuard(APP_DIR, path, "expected " + st.RUNBOOK_BLOB)
+
+    def test_cli_missing_marker(self):
+        # With the fixed CLI inputs any marker change also changes the blob, so the blob guard stops it first;
+        # the marker guard itself is covered at run() level above.
+        require_app()
+        path, _ = write_runbook(self, runbook_text().replace("<!-- run:s3 -->", "<!-- s3 -->"))
+        self.assertCliGuard(APP_DIR, path, "expected " + st.RUNBOOK_BLOB)
+
+    def test_cli_without_docker_on_path_stops_cleanly(self):
+        repo, _ = make_repo(self)
+        bindir = tempfile.mkdtemp(prefix="t10-nodocker-")
+        self.addCleanup(shutil.rmtree, bindir, True)
+        os.symlink(shutil.which("git"), os.path.join(bindir, "git"))
+        self.assertIsNone(shutil.which("docker", path=bindir))
+        code, out = self.run_cli(repo, RUNBOOK, dict(os.environ, PATH=bindir))
+        self.assertEqual(code, 2, out)
+        self.assertIn("GUARD FAIL", out)
+        self.assertNotIn("Traceback", out)
+        self.assertNotIn("FileNotFoundError", out)
 
 
 class ScriptTests(unittest.TestCase):

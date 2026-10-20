@@ -221,9 +221,20 @@ def main(argv=None):
     print(f"APP_SHA {APP_SHA}\nRUNBOOK_SHA {RUNBOOK_SHA} blob {RUNBOOK_BLOB}")
     harness = os.environ.get("GITHUB_SHA", "(local)")
     print(f"harness {harness} run {os.environ.get('GITHUB_RUN_ID', '-')}")
-    server = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
-                            capture_output=True, text=True, timeout=60)
-    docker_server = server.stdout.strip() if server.returncode == 0 else "unavailable"
+    # All input guards run before the first Docker (or bash) call, including `docker version`.
+    try:
+        verify_app(os.path.realpath(args.app))
+        extract_blocks(verify_runbook(args.runbook))
+    except (GuardError, OSError) as exc:
+        print(f"GUARD FAIL: {exc} — nothing was executed")
+        annotate("guard", f"FAIL: {exc} — nothing was executed")
+        return 2
+    try:
+        server = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
+                                capture_output=True, text=True, timeout=60)
+        docker_server = server.stdout.strip() if server.returncode == 0 else "unavailable"
+    except (OSError, subprocess.TimeoutExpired):
+        docker_server = "unavailable"
     annotate("inputs", f"APP_SHA {APP_SHA}; RUNBOOK_SHA {RUNBOOK_SHA} blob {RUNBOOK_BLOB}; "
                        f"harness {harness}; docker server {docker_server}")
     log = io.StringIO()
