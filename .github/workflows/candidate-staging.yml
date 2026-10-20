@@ -1,0 +1,43 @@
+name: Кандидат staging проверка (STAGING-CANDIDATE-01)
+
+# Само за клона на пакета; не е deploy и няма тайни или права за запис.
+on:
+  push:
+    branches: [claude/staging-candidate-01]
+    paths:
+      - docs/runbooks/isolated-staging-check-v2.md
+      - scripts/check-candidate-staging.py
+      - scripts/test-check-candidate-staging.py
+      - .github/workflows/candidate-staging.yml
+      - docs/reports/2026-10-20-STAGING-CANDIDATE-01.md
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harness (този клон)
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Приложението точно на APP_SHA INT-31 (отделен checkout, само за четене)
+        uses: actions/checkout@v4
+        with:
+          ref: 9c6fbc9d64041ac401c3cd87bcb3f4d2eaafc354
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Guard, pin, S6 и cleanup тестове със stub docker (без реален Docker)
+        env:
+          APP_DIR: ${{ github.workspace }}/app
+        run: python -I harness/scripts/test-check-candidate-staging.py
+      - name: Реален disposable Docker пуск на v2 runbook (S1–S6, всички файлове с MIME, почистване)
+        run: >-
+          python -I harness/scripts/check-candidate-staging.py
+          --app app --runbook harness/docs/runbooks/isolated-staging-check-v2.md --timeout 600
