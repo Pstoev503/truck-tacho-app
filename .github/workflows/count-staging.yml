@@ -1,0 +1,67 @@
+name: Брой варианти — браузърна staging проверка S7C (COUNT-STAGING-01)
+
+# Само за клона на пакета; не е deploy и няма тайни или права за запис.
+on:
+  push:
+    branches: [claude/count-staging-01]
+    paths:
+      - docs/runbooks/isolated-staging-check-v3.md
+      - scripts/browser-count-staging.mjs
+      - scripts/browser-count-staging.test.mjs
+      - scripts/check-count-staging.py
+      - scripts/test-check-count-staging.py
+      - .github/workflows/count-staging.yml
+      - docs/reports/2026-10-20-COUNT-STAGING-01.md
+
+permissions:
+  contents: read
+
+jobs:
+  count-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harness (този клон)
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Приложението точно на APP_SHA INT-32 (отделен checkout, само за четене)
+        uses: actions/checkout@v4
+        with:
+          ref: 1a2ccc6543ae2301c0b5dc7b3ead9a5dcff38f76
+          path: app
+          persist-credentials: false
+      - name: Предишният приет APP INT-31 (само за теста, че се отказва)
+        uses: actions/checkout@v4
+        with:
+          ref: 9c6fbc9d64041ac401c3cd87bcb3f4d2eaafc354
+          path: app-old
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Версии и наличен браузър (без инсталиране)
+        run: |
+          BROWSER="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          echo "BROWSER=$BROWSER" >> "$GITHUB_ENV"
+          echo "::notice title=versions::node $(node --version); python $(python --version 2>&1); browser ${BROWSER:-none} $( [ -n "$BROWSER" ] && "$BROWSER" --version ); docker $(docker version --format '{{.Server.Version}}'); $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Unit тестове на count driver-а (без браузър; не са S7C)
+        env:
+          APP_DIR: ${{ github.workspace }}/app
+        run: |
+          node --test --test-reporter=tap harness/scripts/browser-count-staging.test.mjs | tee count-driver-tests.tap
+          echo "::notice title=count driver unit tests - no browser - not S7C::$(grep -E '^# (tests|pass|fail|cancelled)' count-driver-tests.tap | tr '\n' ' ')"
+      - name: Тестове на runner-а със stub docker, фалшиви driver-и и режимите на fake router-а (не са S7C)
+        env:
+          APP_DIR: ${{ github.workspace }}/app
+          OLD_APP_DIR: ${{ github.workspace }}/app-old
+        run: python -I harness/scripts/test-check-count-staging.py
+      - name: Реален disposable Docker пуск на v3 runbook + S7 и S7C в истински headless браузър
+        run: >-
+          python -I harness/scripts/check-count-staging.py
+          --app app --runbook harness/docs/runbooks/isolated-staging-check-v3.md
+          --browser "$BROWSER" --timeout 900
