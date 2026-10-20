@@ -56,7 +56,30 @@
 
 ## 5. Реален Docker пуск в CI
 
-Попълва се след пуска; тук има само резултатите на CI. Пускът на последния head е в предаването в #163, защото отчетът не може да съдържа пуска, който сам задейства.
+Отчетът не може да съдържа пуска, който неговият собствен commit задейства. Затова тук е пускът на първия head на пакета (`5b4f567`), където runbook-ът, runner-ът, тестовете и workflow-ът са същите като на крайния. Крайният head и неговият пуск са в предаването в #163.
+
+**Пуск на `5b4f567d8490c6ab9cd0892bcb3166752b2f604d`**
+
+- run [39460488670](https://github.com/Pstoev503/truck-tacho-app/actions/runs/39460488670), job 118758372282, 16:47:17–16:47:54Z, success. Прочетени са метаданните на стъпките и `::notice` анотациите.
+- **Входове:**
+  - APP `9c6fbc9d64041ac401c3cd87bcb3f4d2eaafc354`;
+  - RUNBOOK `docs/runbooks/isolated-staging-check-v2.md`, blob `f0d7750ff89f8f4c6e5259e35e0cee419df53ce4`;
+  - harness `5b4f567…`;
+  - Docker server 28.0.4.
+- **Стъпка 5 (stub тестове):** `Ran 27 tests; failures 0, errors 0, skipped 0; OK`.
+- **Стъпка 6 (реален Docker):**
+  - пакетиране в образа без мрежа: `PASS: 21 local files reachable from planner.html in /app/web` и `PASS: 15 local files reachable from boss.html in /app/web`;
+  - `owner ok`;
+  - S1–S4: `ok`;
+  - S5: `ok (old-code join: 200)`;
+  - S6: 36 реда `S6 served …` — boss 15 и planner 21. Всеки файл е 200, с непразно тяло и точен MIME (`text/html`, `text/javascript`, `text/css`, `image/png`, `application/json`), включително `/ui/api-error-message.mjs`, `/ui/provider-geometry.mjs` и `/ui/route-options-response.mjs`. Обслуженият списък е равен на пакетирания. Последният ред е `S6 ok (served = packaged; planner 21, boss 15; exact MIME per file)`.
+- **Почистване:** `bash exit 0`. Не е останал container, network или image с label `t10.stage.run=20261020164729-3274`. Временната директория е изтрита. Времето е 23 s, а резултатът — `RESULT: PASS`.
+
+| Сценарий | Статус |
+|---|---|
+| S1–S6 | PASS в реален disposable Docker (`5b4f567`) |
+| S5b | NOT RUN (няма fault injection в staging; покрит само от сървърния тест) |
+| S7 | NOT RUN |
 
 ## 6. Ограничения
 
